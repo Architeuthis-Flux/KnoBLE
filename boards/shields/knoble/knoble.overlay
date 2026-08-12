@@ -69,8 +69,10 @@
         led-strip = <&led_strip>;   /* speed gauge; underglow is disabled */
         poll-hz = <250>;
         idle-poll-hz = <25>;
-        /* no firmware velocity ceiling: output tracks rotation 1:1 (the
-         * 30ms report pooling stays, purely as HID-rate hygiene) */
+        /* no firmware velocity ceiling: output tracks rotation 1:1; short
+         * pooling window = many small reports rather than few big ones, so
+         * app-side per-event scroll animation can't snowball */
+        wheel-report-interval-ms = <10>;
         wheel-max-lines-per-report = <0>;
 
         /* Slider 0: pot wiper on P0.31 (silkscreen 031) = AIN7.
