@@ -73,6 +73,10 @@
          * cadence (idle knob sends nothing). */
         wheel-report-interval-ms = <8>;
 
+        /* Scaled with the 5x finer lines-per-rev below so the anti-banking
+         * window stays the same fraction of a revolution (~0.67 rev). */
+        wheel-queue-max = <160>;
+
         /* Slider 0: pot wiper on P0.31 (silkscreen 031) = AIN7.
          * !! Power the pot from the 3.3V VCC pin, NOT RAW — the nRF's analog
          * !! input absolute max is VDD+0.3V; a 5V wiper would damage it. */
@@ -82,9 +86,15 @@
             layer = <0>;
             mode = "scroll";
             detents-per-rev = <16>;   /* haptic/texture grid */
-            lines-per-rev = <48>;     /* wheel counts per rev at x1 — like a
-                                       * mouse wheel with 48 notches; host
-                                       * scroll handling applies as normal */
+            lines-per-rev = <240>;    /* wheel counts per rev at x1. High on
+                                       * purpose: fine counts keep slow rotation
+                                       * a steady stream of tiny steps so the
+                                       * host smoother never shows discrete
+                                       * hops, and speed can go up without them
+                                       * becoming visible. ~17 AS5600 ticks per
+                                       * line; the 8ms report window still caps
+                                       * the HID event rate at 125/s (fast spins
+                                       * just pack more counts per report). */
             haptic-effect = <1>;              /* TI lib 6: strong click 100% */
             input-code = <INPUT_REL_WHEEL>;
             /* slider sets scroll speed, bottom to top:
