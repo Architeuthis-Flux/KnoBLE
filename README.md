@@ -25,7 +25,13 @@ Wireless version of the BaselineDesign **Knob v2.1**: an nRF52840 SuperMini
    3.3 V-happy LEDs (SK6812) on VCC.
 3. **Speed slider (optional)**: pot wiper → the pad marked **031** (P0.31),
    outer legs → **3.3 V (VCC pin) and GND**. Never feed the wiper from RAW/5 V
-   — the nRF's analog absolute max is VDD + 0.3 V.
+   — the nRF's analog absolute max is VDD + 0.3 V, and the top quarter of
+   travel saturates the ADC anyway.
+   ⚠️ SuperMini clones: the VCC output gate is wired **inverted** vs. a real
+   nice!nano (the overlay drives it active-low — measured on this unit). On
+   stock polarity the VCC pin silently reads 0 V. If your VCC pin is dead,
+   that's this. Genuine nice!nano v2 boards must remove the `&{/EXT_POWER}`
+   override from the overlay.
 4. **DRV2605L + LRA (optional, for haptic detents)**: DRV2605L on the same
    I2C bus (SDA = D2, SCL = D3), address 0x5A, LRA on its output.
 

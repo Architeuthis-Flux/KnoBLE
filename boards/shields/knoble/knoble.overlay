@@ -169,6 +169,16 @@
     };
 };
 
+/* SuperMini clone quirk (measured 2026-08-12): its VCC gate transistor is
+ * wired INVERTED vs. a genuine nice!nano v2 — drive P0.13 LOW to enable the
+ * VCC output. With the stock ACTIVE_HIGH the rail reads 0 V while the
+ * firmware believes ext power is on (this was why VCC was dead through
+ * bring-up). If you ever build for a REAL nice!nano v2, delete this block.
+ * (&ext_power the label resolves to ZMK's behavior node — target by path.) */
+&{/EXT_POWER} {
+    control-gpios = <&gpio0 13 GPIO_ACTIVE_LOW>;
+};
+
 /* The nRF needs I2C pull-ups it can't inherit from the board def; the AVR
  * used its internal pull-ups, and the v2.1 PCB has no discrete ones. The
  * nRF52840's internal ~13k pulls are fine at 100 kHz. */
