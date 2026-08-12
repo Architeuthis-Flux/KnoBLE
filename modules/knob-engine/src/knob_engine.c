@@ -160,6 +160,7 @@ static void haptic_fire(uint8_t effect) {
     if (effect == 0 || !device_is_ready(knob_haptics)) {
         return;
     }
+    LOG_DBG("haptic fire: effect %d", effect);
     struct sensor_value val;
 
     /* slot 0 = the effect, slot 1 = end-of-sequence, then GO */
@@ -269,6 +270,8 @@ static int32_t slider_process(struct knob_data *data, const struct knob_profile 
     case SLIDER_ROLE_OWN_CONTROL: {
         int32_t bucket = (raw * prof->slider_steps) / (SLIDER_RAW_MAX + 1);
         if (sl->valid && bucket != sl->bucket) {
+            LOG_DBG("slider %d: raw %d -> bucket %d (%+d)", prof->slider_index, raw, bucket,
+                    bucket - sl->bucket);
             input_report_rel(data->dev, prof->slider_input_code, bucket - sl->bucket, true,
                              K_NO_WAIT);
             haptic_fire(prof->slider_effect);
@@ -376,6 +379,8 @@ static void knob_work_handler(struct k_work *work) {
 
     /* switching modes drops any partial rotation toward the next detent */
     if (prof != data->last_prof) {
+        LOG_INF("profile switch -> layer %d (mode %d, %d detents/rev, effect %d)", prof->layer,
+                prof->mode, prof->detents_per_rev, prof->haptic_effect);
         data->last_prof = prof;
         data->accum_scaled = 0;
     }
@@ -388,6 +393,7 @@ static void knob_work_handler(struct k_work *work) {
         data->bus_failures = 0;
 
         if (!data->pos_valid) {
+            LOG_INF("AS5600 online, initial position %d ticks", pos);
             data->last_pos = pos;
             data->pos_valid = true;
         }
@@ -412,6 +418,7 @@ static void knob_work_handler(struct k_work *work) {
         if (steps != 0) {
             data->accum_scaled -= steps * TICKS_PER_REV;
             int32_t multiplier = slider_process(data, prof);
+            LOG_DBG("detent %+d at pos %d (mode %d, x%d)", steps, pos, prof->mode, multiplier);
             emit_steps(data, prof, steps, multiplier);
         } else if (prof->slider_role == SLIDER_ROLE_OWN_CONTROL) {
             /* own-control sliders report even when the knob is still */
