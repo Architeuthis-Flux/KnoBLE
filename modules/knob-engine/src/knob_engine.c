@@ -45,8 +45,9 @@
 
 LOG_MODULE_REGISTER(knob_engine, CONFIG_KNOB_ENGINE_LOG_LEVEL);
 
-#define FULL_CIRCLE_MDEG 360000
-#define HALF_CIRCLE_MDEG 180000
+/* AS5600 raw resolution: 4096 ticks per revolution. */
+#define TICKS_PER_REV 4096
+#define HALF_REV_TICKS 2048
 
 /* 12-bit SAADC, gain 1/6, 0.6 V internal ref => 3.6 V full scale.
  * A pot across the 3.3 V rail tops out around this raw value. */
@@ -54,6 +55,8 @@ LOG_MODULE_REGISTER(knob_engine, CONFIG_KNOB_ENGINE_LOG_LEVEL);
 
 /* Minimum gap between end-stop buzzes so leaning on the stop doesn't rattle. */
 #define ENDSTOP_COOLDOWN_MS 250
+
+#define KNOB_ABS(x) ((x) < 0 ? -(x) : (x))
 
 enum knob_mode { KNOB_MODE_SCROLL, KNOB_MODE_KEYCODE, KNOB_MODE_BOUNDED };
 enum slider_role { SLIDER_ROLE_NONE, SLIDER_ROLE_WHEEL_SCALE, SLIDER_ROLE_OWN_CONTROL };
@@ -115,10 +118,11 @@ struct knob_data {
     const struct device *dev;
     struct k_work_delayable work;
 
-    /* rotation tracking, all in millidegrees */
-    int32_t last_angle;
-    int32_t accum;
-    bool angle_valid;
+    /* rotation tracking, in raw sensor ticks (1/4096 rev) */
+    int32_t last_pos;
+    int32_t accum_scaled; /* accumulated (delta * detents_per_rev) */
+    const struct knob_profile *last_prof;
+    bool pos_valid;
 
     /* bounded-mode position, in detent steps */
     int32_t bounded_pos;
@@ -242,7 +246,7 @@ static int32_t slider_process(struct knob_data *data, const struct knob_profile 
     }
 
     const int32_t deadband = DT_INST_PROP(0, slider_deadband);
-    if (sl->valid && ABS(raw - sl->raw) < deadband) {
+    if (sl->valid && KNOB_ABS(raw - sl->raw) < deadband) {
         raw = sl->raw; /* within noise, hold previous */
     }
 
@@ -304,7 +308,7 @@ static void emit_steps(struct knob_data *data, const struct knob_profile *prof, 
         break;
 
     case KNOB_MODE_KEYCODE:
-        for (int32_t i = 0; i < ABS(steps); i++) {
+        for (int32_t i = 0; i < KNOB_ABS(steps); i++) {
             tap_keycode(steps > 0 ? prof->cw_code : prof->ccw_code);
         }
         haptic_fire(prof->haptic_effect);
@@ -333,7 +337,7 @@ static void emit_steps(struct knob_data *data, const struct knob_profile *prof, 
     }
 }
 
-static int knob_read_angle_mdeg(int32_t *out) {
+static int knob_read_position(int32_t *out) {
     struct sensor_value val;
     int err = sensor_sample_fetch(knob_sensor);
     if (err) {
@@ -343,8 +347,12 @@ static int knob_read_angle_mdeg(int32_t *out) {
     if (err) {
         return err;
     }
-    /* val1 = degrees, val2 = fractional micro-degrees */
-    *out = (val.val1 * 1000) + (val.val2 / 1000);
+    /* The in-tree ams_as5600 driver (pinned Zephyr) encodes:
+     *   val1 = whole degrees, val2 = remainder in 1/4096-degree units,
+     * i.e. raw_position * 360 == val1 * 4096 + val2.
+     * Recover the raw 0..4095 tick position exactly.
+     * NOTE: revisit if the driver moves to standard micro-degree val2. */
+    *out = ((val.val1 * TICKS_PER_REV) + val.val2) / 360;
     return 0;
 }
 
@@ -353,33 +361,39 @@ static void knob_work_handler(struct k_work *work) {
     struct knob_data *data = CONTAINER_OF(dwork, struct knob_data, work);
 
     const struct knob_profile *prof = active_profile();
-    int32_t angle;
+    int32_t pos;
 
-    if (knob_read_angle_mdeg(&angle) == 0) {
-        if (!data->angle_valid) {
-            data->last_angle = angle;
-            data->angle_valid = true;
+    /* switching modes drops any partial rotation toward the next detent */
+    if (prof != data->last_prof) {
+        data->last_prof = prof;
+        data->accum_scaled = 0;
+    }
+
+    if (knob_read_position(&pos) == 0) {
+        if (!data->pos_valid) {
+            data->last_pos = pos;
+            data->pos_valid = true;
         }
 
-        int32_t delta = angle - data->last_angle;
-        data->last_angle = angle;
+        int32_t delta = pos - data->last_pos;
+        data->last_pos = pos;
 
-        /* shortest-path wraparound (0 <-> 360 crossing) */
-        if (delta > HALF_CIRCLE_MDEG) {
-            delta -= FULL_CIRCLE_MDEG;
-        } else if (delta < -HALF_CIRCLE_MDEG) {
-            delta += FULL_CIRCLE_MDEG;
+        /* shortest-path wraparound (4095 <-> 0 crossing) */
+        if (delta > HALF_REV_TICKS) {
+            delta -= TICKS_PER_REV;
+        } else if (delta < -HALF_REV_TICKS) {
+            delta += TICKS_PER_REV;
         }
 #if DT_INST_PROP(0, invert)
         delta = -delta;
 #endif
-        data->accum += delta;
-
-        const int32_t detent_mdeg = FULL_CIRCLE_MDEG / MAX(prof->detents_per_rev, 1);
-        int32_t steps = data->accum / detent_mdeg;
+        /* exact integer detent quantizer: accumulate delta * detents, one
+         * step per full TICKS_PER_REV of accumulated product */
+        data->accum_scaled += delta * (int32_t)MAX(prof->detents_per_rev, 1);
+        int32_t steps = data->accum_scaled / TICKS_PER_REV;
 
         if (steps != 0) {
-            data->accum -= steps * detent_mdeg;
+            data->accum_scaled -= steps * TICKS_PER_REV;
             int32_t multiplier = slider_process(data, prof);
             emit_steps(data, prof, steps, multiplier);
         } else if (prof->slider_role == SLIDER_ROLE_OWN_CONTROL) {

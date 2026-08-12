@@ -115,9 +115,9 @@ too. Haptic-on-keypress uses `zmk,output-behavior-listener` in the same file.
   oversampling, which can wedge other SAADC reads (sliders). Fix order:
   (a) test as-is; (b) override the `vbatt` node with a zero-oversampling
   battery driver in knob-engine; (c) last resort `CONFIG_ZMK_BATTERY_REPORTING=n`.
-- **Zephyr upgrades**: `CONFIG_AS5600` was renamed `CONFIG_AMS_AS5600` in
-  Zephyr 4.x, and the badjeff modules are SHA-pinned against ZMK v0.3 —
-  revisit both when bumping ZMK past v0.3.
+- **Zephyr upgrades**: the badjeff modules are SHA-pinned against ZMK v0.3,
+  and knob-engine relies on the pinned AS5600 driver's value encoding
+  (see `knob_read_position()`) — revisit both when bumping ZMK past v0.3.
 - Runtime detent tuning (settings storage + an adjust behavior) is designed
   but not yet implemented — sensitivity changes are compile-time for now.
 - SuperMini batch quirks: some units leak ~1 mA in sleep (5.6K pull-up or

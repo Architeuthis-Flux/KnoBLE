@@ -10,8 +10,10 @@
  *   WS2812 data (3 LEDs, SPI)        D1        (P0.06)
  */
 
-#include <dt-bindings/zmk/matrix_transform.h>
+/* keys.h first: it also defines an RC() macro (right-ctrl modifier) that
+ * would otherwise clobber matrix_transform.h's RC(row,col). */
 #include <dt-bindings/zmk/keys.h>
+#include <dt-bindings/zmk/matrix_transform.h>
 #include <zephyr/dt-bindings/input/input-event-codes.h>
 #include <dt-bindings/led/led.h>
 #include <physical_layouts.dtsi>
