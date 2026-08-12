@@ -114,9 +114,13 @@ struct slider_state {
 };
 #endif
 
+/* Consecutive I2C failures before dropping to the 1 Hz recovery poll. */
+#define BUS_FAIL_BACKOFF_THRESHOLD 8
+
 struct knob_data {
     const struct device *dev;
     struct k_work_delayable work;
+    uint32_t bus_failures;
 
     /* rotation tracking, in raw sensor ticks (1/4096 rev) */
     int32_t last_pos;
@@ -141,6 +145,13 @@ static const struct device *const knob_haptics = DEVICE_DT_GET(DT_INST_PHANDLE(0
 #endif
 
 static struct knob_data knob_data_0;
+
+/* The knob gets its own work queue: sensor reads block for the full I2C
+ * timeout when the bus is unhappy, and running that on the system workqueue
+ * starves ZMK's key scanning, HID, and LED work. Never borrow the system
+ * queue for something that can stall on hardware. */
+static K_THREAD_STACK_DEFINE(knob_wq_stack, 1024);
+static struct k_work_q knob_wq;
 
 /* ---------------- haptics ---------------- */
 
@@ -370,6 +381,12 @@ static void knob_work_handler(struct k_work *work) {
     }
 
     if (knob_read_position(&pos) == 0) {
+        if (data->bus_failures >= BUS_FAIL_BACKOFF_THRESHOLD) {
+            LOG_INF("AS5600 recovered after %u failed reads", data->bus_failures);
+            data->pos_valid = false; /* stale last_pos, resync */
+        }
+        data->bus_failures = 0;
+
         if (!data->pos_valid) {
             data->last_pos = pos;
             data->pos_valid = true;
@@ -401,18 +418,26 @@ static void knob_work_handler(struct k_work *work) {
             slider_process(data, prof);
         }
     } else {
-        static uint32_t fail_count;
-        if ((fail_count++ % 512) == 0) {
-            LOG_WRN("AS5600 read failing (count %u) — check I2C wiring/address", fail_count);
+        data->bus_failures++;
+        if (data->bus_failures == BUS_FAIL_BACKOFF_THRESHOLD) {
+            LOG_WRN("AS5600 unreachable (%u consecutive failures) — backing off to 1 Hz. "
+                    "Check I2C wiring, pull-ups, and sensor power.",
+                    data->bus_failures);
         }
     }
 
-    /* activity-gated poll rate */
+    /* Bus dead? Poll at 1 Hz until it comes back so a broken sensor can't
+     * monopolize the bus or this thread. Otherwise activity-gated rate. */
+    if (data->bus_failures >= BUS_FAIL_BACKOFF_THRESHOLD) {
+        k_work_reschedule_for_queue(&knob_wq, dwork, K_SECONDS(1));
+        return;
+    }
+
     uint32_t hz = DT_INST_PROP(0, poll_hz);
     if (zmk_activity_get_state() != ZMK_ACTIVITY_ACTIVE) {
         hz = DT_INST_PROP(0, idle_poll_hz);
     }
-    k_work_reschedule(dwork, K_USEC(1000000 / MAX(hz, 1)));
+    k_work_reschedule_for_queue(&knob_wq, dwork, K_USEC(1000000 / MAX(hz, 1)));
 }
 
 /* ---------------- init ---------------- */
@@ -431,9 +456,13 @@ static int knob_engine_init(const struct device *dev) {
     slider_adc_init(data); /* sliders are best-effort; knob works without them */
 #endif
 
+    k_work_queue_start(&knob_wq, knob_wq_stack, K_THREAD_STACK_SIZEOF(knob_wq_stack),
+                       K_PRIO_PREEMPT(10), NULL);
+    k_thread_name_set(&knob_wq.thread, "knob_engine");
+
     k_work_init_delayable(&data->work, knob_work_handler);
     /* small delay so I2C + AS5600 settle after power-on */
-    k_work_reschedule(&data->work, K_MSEC(50));
+    k_work_reschedule_for_queue(&knob_wq, &data->work, K_MSEC(50));
 
     LOG_INF("knob engine up: %d profiles, %d sliders", (int)ARRAY_SIZE(profiles),
 #if KNOB_HAS_SLIDERS
