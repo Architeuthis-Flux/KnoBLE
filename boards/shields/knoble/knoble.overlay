@@ -81,11 +81,11 @@
             haptic-effect = <1>;              /* TI lib 6: strong click 100% */
             input-code = <INPUT_REL_WHEEL>;
             /* slider sets scroll speed, bottom to top:
-             * 1 line per 10 detents ... /2, x1 (center-ish), x2 ... x8 */
+             * /5 /4 /3 /2, x1, x2 x3 x4 */
             slider-role = "wheel-scale";
             slider-index = <0>;
-            wheel-scale-max = <8>;
-            wheel-scale-min-div = <10>;
+            wheel-scale-max = <4>;
+            wheel-scale-min-div = <5>;
         };
 
         profile_volume {
