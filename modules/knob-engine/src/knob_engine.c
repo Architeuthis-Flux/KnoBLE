@@ -401,7 +401,10 @@ static void knob_work_handler(struct k_work *work) {
             slider_process(data, prof);
         }
     } else {
-        LOG_DBG("AS5600 read failed");
+        static uint32_t fail_count;
+        if ((fail_count++ % 512) == 0) {
+            LOG_WRN("AS5600 read failing (count %u) — check I2C wiring/address", fail_count);
+        }
     }
 
     /* activity-gated poll rate */
