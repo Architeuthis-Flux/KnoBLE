@@ -69,6 +69,9 @@
         led-strip = <&led_strip>;   /* speed gauge; underglow is disabled */
         poll-hz = <250>;
         idle-poll-hz = <25>;
+        /* no firmware velocity ceiling: output tracks rotation 1:1 (the
+         * 30ms report pooling stays, purely as HID-rate hygiene) */
+        wheel-max-lines-per-report = <0>;
 
         /* Slider 0: pot wiper on P0.31 (silkscreen 031) = AIN7.
          * !! Power the pot from the 3.3V VCC pin, NOT RAW — the nRF's analog
@@ -82,13 +85,14 @@
             haptic-effect = <1>;              /* TI lib 6: strong click 100% */
             input-code = <INPUT_REL_WHEEL>;
             /* slider sets scroll speed, bottom to top:
-             * /5 /4 /3 /2, x1, x2 x3 x4 — quadratic curve, so ~70% of the
-             * pot travel stays at 1x or slower; multipliers need a crank */
+             * /5 /4 /3 /2, x1, x2 x3 x4 — linear travel. Output is strictly
+             * proportional to rotation; disable macOS's per-device scroll
+             * acceleration (LinearMouse) instead of masking it here. */
             slider-role = "wheel-scale";
             slider-index = <0>;
             wheel-scale-max = <4>;
             wheel-scale-min-div = <5>;
-            slider-curve-power = <2>;
+            slider-curve-power = <1>;
         };
 
         profile_volume {
