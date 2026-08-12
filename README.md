@@ -75,20 +75,46 @@ Needs cmake, ninja, dtc, and a Zephyr SDK ARM toolchain
   bootloader drive itself. `./flash.sh` waits for the drive and copies
   automatically.
 
-### Host setup (macOS — required for correct scroll feel)
+### Host setup (macOS — this is where the great scroll feel comes from)
 
-macOS applies its own scroll acceleration to sustained wheel streams, which
-stacks on top of the knob's physical flywheel inertia (flick coasts run away
-while the knob is actually slowing down). The firmware is strictly linear;
-disable the OS curve **for this device only** with
-[LinearMouse](https://linearmouse.app):
+The firmware reports like a normal mouse wheel (counts per report, 48
+notches/rev at ×1). The buttery glide comes from
+[LinearMouse](https://linearmouse.app) (free, MIT) re-posting those clicks as
+smooth continuous scrolling — something a HID wheel device cannot emit
+itself. Install it and use this scheme (per-device: your mouse is
+unaffected):
 
 ```bash
 brew install --cask linearmouse
 ```
 
-LinearMouse → device **KnoBLE** → Scrolling → linear / no acceleration.
-Your mouse keeps its normal behavior.
+`~/.config/linearmouse/linearmouse.json` — the blessed KnoBLE block:
+
+```json
+{
+  "if": { "device": { "productName": "KnoBLE", "vendorID": "0x1d50", "productID": "0x615e" } },
+  "scrolling": {
+    "acceleration": { "vertical": 1 },
+    "distance": { "vertical": "auto" },
+    "speed": { "vertical": 0 },
+    "smoothed": {
+      "vertical": {
+        "enabled": true,
+        "preset": "easeOutQuartic",
+        "response": 2,
+        "speed": 1.1,
+        "acceleration": 0.17,
+        "inertia": 0,
+        "bouncing": true
+      }
+    }
+  }
+}
+```
+
+⚠️ Touching this device's sliders in the LinearMouse **GUI rewrites the
+scheme** — edit the JSON instead (it hot-reloads). Without LinearMouse the
+knob still works everywhere as a plain mouse wheel, just without the glide.
 
 ## Controls
 
@@ -106,12 +132,12 @@ Your mouse keeps its normal behavior.
 
 | Dial | Meaning | Current |
 |---|---|---|
-| `lines-per-rev` | scroll resolution (page-motion per rev at ×1) | 96 |
+| `lines-per-rev` | wheel counts per rev at ×1 (like mouse-wheel notches) | 48 |
 | `detents-per-rev` | haptic click grid; output step for volume/bounded | 16 (scroll), 48 (volume) |
 | `wheel-scale-max` / `wheel-scale-min-div` | slider speed range | ×4 / ÷5 |
 | `slider-curve-power` | pot response: 1 linear, 2–3 bias slow | 1 |
-| `wheel-report-interval-ms` | HID report pooling window | 30 |
-| `wheel-max-lines-per-report` | hard velocity ceiling (0 = off) | 0 |
+| `wheel-report-interval-ms` | HID report pooling window (mouse cadence) | 8 |
+| `wheel-queue-max` | max pooled counts (drops excess on wild flicks) | 32 |
 | `haptic-effect` / `endstop-effect` | TI DRV2605L waveform library IDs (datasheet §12.1.2) | 1 / 14 |
 | `invert` (on `knob_engine`) | flip rotation direction | unset |
 
