@@ -71,9 +71,9 @@
         idle-poll-hz = <25>;
         /* Scroll goes out as +/-1 unit events, one per interval — hosts in
          * fixed-pixel mode (LinearMouse) only honor event sign, so rate IS
-         * the speed. 5ms = up to 200 units/s; pair with LinearMouse "6px"
-         * => ~1200px/s ceiling. */
-        wheel-report-interval-ms = <5>;
+         * the speed. 8ms = 125 events/s ceiling (standard BLE mouse report
+         * rate; idle knob sends nothing). Pair with LinearMouse "10px". */
+        wheel-report-interval-ms = <8>;
 
         /* Slider 0: pot wiper on P0.31 (silkscreen 031) = AIN7.
          * !! Power the pot from the 3.3V VCC pin, NOT RAW — the nRF's analog
