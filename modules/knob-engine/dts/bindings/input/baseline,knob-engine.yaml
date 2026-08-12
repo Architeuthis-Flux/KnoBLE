@@ -17,6 +17,13 @@ properties:
     type: phandle
     description: DRV2605 haptic driver device (badjeff/zmk-drv2605-driver)
 
+  led-strip:
+    type: phandle
+    description: |
+      LED strip the engine drives as a speed gauge (blue = slowest divider,
+      green = 1x, red = fastest multiplier). Takes exclusive ownership —
+      disable ZMK RGB underglow when using this.
+
   poll-hz:
     type: int
     default: 250

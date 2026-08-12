@@ -66,6 +66,7 @@
         compatible = "baseline,knob-engine";
         sensor = <&as5600>;
         haptics = <&drv2605>;
+        led-strip = <&led_strip>;   /* speed gauge; underglow is disabled */
         poll-hz = <250>;
         idle-poll-hz = <25>;
 

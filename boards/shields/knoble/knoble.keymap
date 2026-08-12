@@ -3,17 +3,27 @@
 #include <dt-bindings/zmk/bt.h>
 #include <dt-bindings/zmk/outputs.h>
 #include <dt-bindings/zmk/ext_power.h>
-#include <dt-bindings/zmk/rgb.h>
 
 / {
-    /* Press BOTH keys together -> reboot into the UF2 bootloader
-     * (NICENANO drive mounts; no physical double-tap needed). */
+    /* HOLD both keys for 3 seconds -> reboot into the UF2 bootloader
+     * (NICENANO drive mounts; no physical double-tap needed).
+     * Release early and nothing happens. */
+    behaviors {
+        bl_hold: bootloader_hold {
+            compatible = "zmk,behavior-hold-tap";
+            #binding-cells = <2>;
+            tapping-term-ms = <3000>;
+            flavor = "hold-preferred";
+            bindings = <&bootloader>, <&none>;
+        };
+    };
+
     combos {
         compatible = "zmk,combos";
         combo_bootloader {
             timeout-ms = <100>;
             key-positions = <0 1>;
-            bindings = <&bootloader>;
+            bindings = <&bl_hold 0 0>;
         };
     };
 
@@ -28,11 +38,11 @@
         };
 
         /* Layer 1 — knob is volume with finer detents (profile_volume).
-         * Left key cycles the underglow effect. Position 2 is unpopulated
-         * on this PCB, so its binding (output toggle) is effectively spare. */
+         * Left key toggles USB/BLE output. Position 2 is unpopulated
+         * on this PCB, so its binding is spare. */
         volume_layer {
             display-name = "Volume";
-            bindings = <&rgb_ug RGB_EFF  &trans  &out OUT_TOG>;
+            bindings = <&out OUT_TOG  &trans  &bt BT_CLR>;
         };
     };
 };

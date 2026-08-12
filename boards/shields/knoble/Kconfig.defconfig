@@ -17,11 +17,12 @@ config ZMK_POINTING
 config INPUT
     default y
 
-# WS2812 underglow (3 LEDs) over SPI.
-config ZMK_RGB_UNDERGLOW
+# 3x WS2812 over SPI, driven directly by knob-engine as a speed gauge
+# (ZMK RGB underglow stays off — two writers would fight over the strip).
+config WS2812_STRIP
     default y
 
-config WS2812_STRIP
+config LED_STRIP
     default y
 
 config SPI

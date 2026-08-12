@@ -43,6 +43,14 @@
 #define KNOB_HAS_HAPTICS 0
 #endif
 
+#if DT_INST_NODE_HAS_PROP(0, led_strip)
+#include <zephyr/drivers/led_strip.h>
+#define KNOB_HAS_LEDS 1
+#define LED_CHAIN DT_PROP(DT_INST_PHANDLE(0, led_strip), chain_length)
+#else
+#define KNOB_HAS_LEDS 0
+#endif
+
 LOG_MODULE_REGISTER(knob_engine, CONFIG_KNOB_ENGINE_LOG_LEVEL);
 
 /* AS5600 raw resolution: 4096 ticks per revolution. */
@@ -137,6 +145,10 @@ struct knob_data {
     /* sub-1x wheel speed: detents banked toward the next emitted line */
     int32_t wheel_pending;
 
+    /* wheel-scale speed sampled continuously so the LED gauge is live */
+    int32_t cached_speed;
+    uint8_t slider_tick;
+
 #if KNOB_HAS_SLIDERS
     struct slider_state sliders[NUM_SLIDERS];
     bool adc_ready;
@@ -147,6 +159,10 @@ static const struct device *const knob_sensor = DEVICE_DT_GET(DT_INST_PHANDLE(0,
 
 #if KNOB_HAS_HAPTICS
 static const struct device *const knob_haptics = DEVICE_DT_GET(DT_INST_PHANDLE(0, haptics));
+#endif
+
+#if KNOB_HAS_LEDS
+static const struct device *const knob_leds = DEVICE_DT_GET(DT_INST_PHANDLE(0, led_strip));
 #endif
 
 static struct knob_data knob_data_0;
@@ -182,6 +198,74 @@ static void haptic_fire(uint8_t effect) {
     ARG_UNUSED(effect);
 #endif
 }
+
+/* ---------------- LED speed gauge ---------------- */
+
+#if KNOB_HAS_LEDS
+
+/* hue 0-359 at full saturation -> RGB, value = brightness */
+static struct led_rgb hue_to_rgb(uint16_t h, uint8_t v) {
+    uint8_t region = (h / 60) % 6;
+    uint8_t rem = (h % 60) * 255 / 60;
+    uint8_t q = (uint16_t)v * (255 - rem) / 255;
+    uint8_t t = (uint16_t)v * rem / 255;
+
+    switch (region) {
+    case 0:
+        return (struct led_rgb){.r = v, .g = t, .b = 0};
+    case 1:
+        return (struct led_rgb){.r = q, .g = v, .b = 0};
+    case 2:
+        return (struct led_rgb){.r = 0, .g = v, .b = t};
+    case 3:
+        return (struct led_rgb){.r = 0, .g = q, .b = v};
+    case 4:
+        return (struct led_rgb){.r = t, .g = 0, .b = v};
+    default:
+        return (struct led_rgb){.r = v, .g = 0, .b = q};
+    }
+}
+
+#define LED_GAUGE_BRIGHTNESS 60
+
+/* Whole strip shows the speed: 240deg (blue) at the slowest divider,
+ * through green around 1x, to 0deg (red) at the top multiplier. */
+static void leds_show_speed(const struct knob_profile *prof, int32_t speed) {
+    if (!device_is_ready(knob_leds)) {
+        return;
+    }
+
+    const int32_t max_m = MAX(prof->wheel_scale_max, 1);
+    const int32_t min_d = MAX(prof->wheel_scale_min_div, 1);
+    const int32_t span = MAX((min_d - 1) + (max_m - 1), 1);
+    int32_t n = (speed < 0) ? (min_d + speed) : (min_d - 1 + speed - 1);
+    n = CLAMP(n, 0, span);
+
+    struct led_rgb px = hue_to_rgb(240 - (240 * n) / span, LED_GAUGE_BRIGHTNESS);
+    struct led_rgb buf[LED_CHAIN];
+    for (size_t i = 0; i < LED_CHAIN; i++) {
+        buf[i] = px;
+    }
+    led_strip_update_rgb(knob_leds, buf, LED_CHAIN);
+}
+
+static void leds_off(void) {
+    if (!device_is_ready(knob_leds)) {
+        return;
+    }
+    struct led_rgb buf[LED_CHAIN] = {0};
+    led_strip_update_rgb(knob_leds, buf, LED_CHAIN);
+}
+
+#else
+
+static void leds_show_speed(const struct knob_profile *prof, int32_t speed) {
+    ARG_UNUSED(prof);
+    ARG_UNUSED(speed);
+}
+static void leds_off(void) {}
+
+#endif /* KNOB_HAS_LEDS */
 
 /* ---------------- profile selection ---------------- */
 
@@ -422,6 +506,22 @@ static void knob_work_handler(struct k_work *work) {
         data->last_prof = prof;
         data->accum_scaled = 0;
         data->wheel_pending = 0;
+        if (prof->slider_role == SLIDER_ROLE_WHEEL_SCALE) {
+            leds_show_speed(prof, data->cached_speed);
+        } else {
+            leds_off(); /* gauge only means something in wheel-scale profiles */
+        }
+    }
+
+    /* Sample the slider continuously (~30 Hz) so the LED gauge tracks the
+     * pot live, not just when the knob moves. */
+    if (prof->slider_role == SLIDER_ROLE_WHEEL_SCALE && (data->slider_tick++ % 8) == 0) {
+        int32_t speed = slider_process(data, prof);
+        if (speed != data->cached_speed) {
+            data->cached_speed = speed;
+            LOG_INF("speed -> %+d", speed);
+            leds_show_speed(prof, speed);
+        }
     }
 
     if (knob_read_position(&pos) == 0) {
@@ -456,7 +556,10 @@ static void knob_work_handler(struct k_work *work) {
 
         if (steps != 0) {
             data->accum_scaled -= steps * TICKS_PER_REV;
-            int32_t speed = slider_process(data, prof);
+            /* wheel-scale speed comes from the continuous sampling above */
+            int32_t speed = (prof->slider_role == SLIDER_ROLE_WHEEL_SCALE)
+                                ? data->cached_speed
+                                : slider_process(data, prof);
             /* speed +M = M lines/detent; -D = one line per D detents */
             LOG_DBG("detent %+d at pos %d (mode %d, speed %+d)", steps, pos, prof->mode, speed);
             emit_steps(data, prof, steps, speed);
@@ -493,6 +596,7 @@ static int knob_engine_init(const struct device *dev) {
     struct knob_data *data = dev->data;
 
     data->dev = dev;
+    data->cached_speed = 1;
 
     if (!device_is_ready(knob_sensor)) {
         LOG_ERR("angle sensor not ready");
