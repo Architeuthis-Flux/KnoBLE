@@ -130,4 +130,12 @@ child-binding:
     wheel-scale-max:
       type: int
       default: 4
-      description: max multiplier when slider-role is wheel-scale
+      description: max multiplier when slider-role is wheel-scale (slider at top)
+
+    wheel-scale-min-div:
+      type: int
+      default: 1
+      description: |
+        max divider when slider-role is wheel-scale (slider at bottom):
+        the knob emits one output per this many detents. 1 = low end is
+        normal 1x speed (no sub-speed range).

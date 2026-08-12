@@ -78,6 +78,7 @@ struct knob_profile {
     uint16_t slider_steps;
     uint8_t slider_effect;
     uint8_t wheel_scale_max;
+    uint8_t wheel_scale_min_div;
 };
 
 #define KNOB_PROFILE_ENTRY(node)                                                                   \
@@ -98,6 +99,7 @@ struct knob_profile {
         .slider_steps = DT_PROP(node, slider_steps),                                               \
         .slider_effect = DT_PROP(node, slider_effect),                                             \
         .wheel_scale_max = DT_PROP(node, wheel_scale_max),                                         \
+        .wheel_scale_min_div = DT_PROP(node, wheel_scale_min_div),                                 \
     },
 
 static const struct knob_profile profiles[] = {DT_INST_FOREACH_CHILD(0, KNOB_PROFILE_ENTRY)};
@@ -131,6 +133,9 @@ struct knob_data {
     /* bounded-mode position, in detent steps */
     int32_t bounded_pos;
     int64_t last_endstop_ms;
+
+    /* sub-1x wheel speed: detents banked toward the next emitted line */
+    int32_t wheel_pending;
 
 #if KNOB_HAS_SLIDERS
     struct slider_state sliders[NUM_SLIDERS];
@@ -242,19 +247,22 @@ static int slider_read_raw(uint8_t channel, int32_t *out) {
     return 0;
 }
 
-/* Returns the scroll multiplier for wheel-scale profiles (>= 1). */
+/* Returns the signed wheel speed for wheel-scale profiles:
+ *   +M -> emit M lines per detent (multiplier)
+ *   -D -> emit 1 line per D detents (divider)
+ * Never returns 0; 1 means plain 1:1. */
 static int32_t slider_process(struct knob_data *data, const struct knob_profile *prof) {
-    int32_t multiplier = 1;
+    int32_t speed = 1;
 
     if (!data->adc_ready || prof->slider_role == SLIDER_ROLE_NONE ||
         prof->slider_index >= NUM_SLIDERS) {
-        return multiplier;
+        return speed;
     }
 
     struct slider_state *sl = &data->sliders[prof->slider_index];
     int32_t raw;
     if (slider_read_raw(slider_channels[prof->slider_index], &raw) != 0) {
-        return multiplier;
+        return speed;
     }
 
     const int32_t deadband = DT_INST_PROP(0, slider_deadband);
@@ -263,9 +271,23 @@ static int32_t slider_process(struct knob_data *data, const struct knob_profile 
     }
 
     switch (prof->slider_role) {
-    case SLIDER_ROLE_WHEEL_SCALE:
-        multiplier = 1 + (raw * (prof->wheel_scale_max - 1)) / (SLIDER_RAW_MAX + 1);
+    case SLIDER_ROLE_WHEEL_SCALE: {
+        /* Map slider travel onto notches spanning /min_div ... x max_mult,
+         * e.g. min-div 10, max 8: /10 /9 ... /2, x1, x2 ... x8 */
+        const int32_t max_m = MAX(prof->wheel_scale_max, 1);
+        const int32_t min_d = MAX(prof->wheel_scale_min_div, 1);
+        const int32_t span = (min_d - 1) + (max_m - 1);
+        if (span > 0) {
+            int32_t n = (raw * (span + 1)) / (SLIDER_RAW_MAX + 1);
+            n = MIN(n, span);
+            if (n < min_d - 1) {
+                speed = -(min_d - n); /* divider: /min_d at the bottom, /2 mid */
+            } else {
+                speed = n - (min_d - 1) + 1; /* multiplier: x1 ... x max_m */
+            }
+        }
         break;
+    }
 
     case SLIDER_ROLE_OWN_CONTROL: {
         int32_t bucket = (raw * prof->slider_steps) / (SLIDER_RAW_MAX + 1);
@@ -285,7 +307,7 @@ static int32_t slider_process(struct knob_data *data, const struct knob_profile 
 
     sl->raw = raw;
     sl->valid = true;
-    return multiplier;
+    return speed;
 }
 
 #else /* !KNOB_HAS_SLIDERS */
@@ -293,7 +315,7 @@ static int32_t slider_process(struct knob_data *data, const struct knob_profile 
 static int32_t slider_process(struct knob_data *data, const struct knob_profile *prof) {
     ARG_UNUSED(data);
     ARG_UNUSED(prof);
-    return 1;
+    return 1; /* plain 1:1 speed */
 }
 
 #endif /* KNOB_HAS_SLIDERS */
@@ -310,16 +332,30 @@ static void tap_keycode(uint32_t encoded) {
 }
 
 static void emit_steps(struct knob_data *data, const struct knob_profile *prof, int32_t steps,
-                       int32_t multiplier) {
+                       int32_t speed) {
     if (steps == 0) {
         return;
     }
 
     switch (prof->mode) {
-    case KNOB_MODE_SCROLL:
-        input_report_rel(data->dev, prof->input_code, steps * multiplier, true, K_NO_WAIT);
+    case KNOB_MODE_SCROLL: {
+        int32_t out;
+        if (speed >= 1) {
+            out = steps * speed;
+        } else {
+            /* sub-1x: bank detents, emit one line per |speed| of them */
+            const int32_t div = -speed;
+            data->wheel_pending += steps;
+            out = data->wheel_pending / div;
+            data->wheel_pending -= out * div;
+        }
+        if (out != 0) {
+            input_report_rel(data->dev, prof->input_code, out, true, K_NO_WAIT);
+        }
+        /* the physical detent feel stays 1:1 regardless of speed */
         haptic_fire(prof->haptic_effect);
         break;
+    }
 
     case KNOB_MODE_KEYCODE:
         for (int32_t i = 0; i < KNOB_ABS(steps); i++) {
@@ -334,7 +370,9 @@ static void emit_steps(struct knob_data *data, const struct knob_profile *prof, 
         data->bounded_pos = target;
 
         if (moved != 0) {
-            input_report_rel(data->dev, prof->input_code, moved * multiplier, true, K_NO_WAIT);
+            /* bounded mode ignores sub-1x speeds; dividers make no sense
+             * against a hard-clamped position */
+            input_report_rel(data->dev, prof->input_code, moved * MAX(speed, 1), true, K_NO_WAIT);
             haptic_fire(prof->haptic_effect);
         }
         if (moved != steps) { /* clipped at an end-stop */
@@ -383,6 +421,7 @@ static void knob_work_handler(struct k_work *work) {
                 prof->mode, prof->detents_per_rev, prof->haptic_effect);
         data->last_prof = prof;
         data->accum_scaled = 0;
+        data->wheel_pending = 0;
     }
 
     if (knob_read_position(&pos) == 0) {
@@ -417,9 +456,10 @@ static void knob_work_handler(struct k_work *work) {
 
         if (steps != 0) {
             data->accum_scaled -= steps * TICKS_PER_REV;
-            int32_t multiplier = slider_process(data, prof);
-            LOG_DBG("detent %+d at pos %d (mode %d, x%d)", steps, pos, prof->mode, multiplier);
-            emit_steps(data, prof, steps, multiplier);
+            int32_t speed = slider_process(data, prof);
+            /* speed +M = M lines/detent; -D = one line per D detents */
+            LOG_DBG("detent %+d at pos %d (mode %d, speed %+d)", steps, pos, prof->mode, speed);
+            emit_steps(data, prof, steps, speed);
         } else if (prof->slider_role == SLIDER_ROLE_OWN_CONTROL) {
             /* own-control sliders report even when the knob is still */
             slider_process(data, prof);
