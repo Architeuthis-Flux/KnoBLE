@@ -1,8 +1,15 @@
 # KnoBLE
 
-Wireless version of the BaselineDesign **Knob v2.1**: an nRF52840 SuperMini
-(nice!nano-clone form factor) in place of the Pro Micro, running
-[ZMK](https://zmk.dev) over Bluetooth or USB.
+Wireless version of the **[KNOB v2.1](https://baselinedesign.tech/products/knobv21)**
+by Connor's [BaselineDesign](https://baselinedesign.tech/products/knobv21):
+an nRF52840 SuperMini (nice!nano-clone form factor) in place of the Pro
+Micro, running [ZMK](https://zmk.dev) over Bluetooth or USB.
+
+> 🛒 **Get the knob:** the KNOB v2.1 — the magnetic dial, haptics-ready PCB,
+> and keys this mod builds on — is at
+> **[baselinedesign.tech/products/knobv21](https://baselinedesign.tech/products/knobv21)**.
+
+![KnoBLE — wireless KNOB v2.1 with speed slider and two keys](docs/pics/IMG_3662.jpeg)
 
 - **AS5600 magnetic knob** with firmware-defined detents and (with a DRV2605L)
   a haptic click per detent — detent count, feel, and function change per mode.
@@ -43,6 +50,18 @@ Wireless version of the BaselineDesign **Knob v2.1**: an nRF52840 SuperMini
    override from the overlay.
 4. **DRV2605L + LRA (optional, for haptic detents)**: DRV2605L on the same
    I2C bus (SDA = D2, SCL = D3), address 0x5A, LRA on its output.
+
+The retrofit, opened up — SuperMini + 10280 Li-ion cell in the dial channel,
+slider + switch pod on the side:
+
+<p>
+  <img src="docs/pics/IMG_3666.jpeg" width="49%" alt="Opened KnoBLE: SuperMini and battery in the dial channel, slider pod at right" />
+  <img src="docs/pics/IMG_3667.jpeg" width="49%" alt="Internals from the other side: battery, haptics wiring, slider and power switch pod" />
+</p>
+
+Wiring close-up (SuperMini pads → knob PCB; RAW top-left):
+
+<img src="docs/pics/IMG_3665.jpeg" width="70%" alt="Close-up of SuperMini wiring onto the KNOB v2.1 PCB" />
 
 Pin map (pro-micro positions → nRF52840):
 
