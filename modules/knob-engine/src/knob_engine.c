@@ -466,27 +466,24 @@ static void emit_steps(struct knob_data *data, const struct knob_profile *prof, 
     }
 }
 
-/* Emit pooled scroll output, at most one report per wheel-report-interval-ms.
- * Slow turning still reports immediately (the window has long expired by the
- * next detent); fast spins get summed into few, larger events. */
+/* Drip pooled scroll output as UNIT (+/-1) events, one per
+ * wheel-report-interval-ms. Hosts that replace wheel events with a fixed
+ * pixel distance (LinearMouse pixel mode) only honor the event's sign, so
+ * speed must be carried by event RATE, not magnitude. The queue is capped:
+ * excess is dropped so the page never keeps coasting after the knob stops. */
 static void wheel_flush(struct knob_data *data, bool force) {
+    ARG_UNUSED(force);
     if (data->out_pending == 0 || data->last_prof == NULL) {
         return;
     }
     int64_t now = k_uptime_get();
-    if (!force && (now - data->last_flush_ms) < DT_INST_PROP(0, wheel_report_interval_ms)) {
+    if ((now - data->last_flush_ms) < DT_INST_PROP(0, wheel_report_interval_ms)) {
         return;
     }
 
-    int32_t out = data->out_pending;
-    /* velocity ceiling: the flywheel's inertia is acceleration enough —
-     * drop anything past the cap instead of banking it */
-    const int32_t cap = DT_INST_PROP(0, wheel_max_lines_per_report);
-    if (cap > 0) {
-        out = CLAMP(out, -cap, cap);
-    }
-    input_report_rel(data->dev, data->last_prof->input_code, out, true, K_NO_WAIT);
-    data->out_pending = 0;
+    int32_t step = data->out_pending > 0 ? 1 : -1;
+    input_report_rel(data->dev, data->last_prof->input_code, step, true, K_NO_WAIT);
+    data->out_pending -= step;
     data->last_flush_ms = now;
 }
 
@@ -588,7 +585,9 @@ static void knob_work_handler(struct k_work *work) {
             int32_t lines = data->out_accum_scaled / TICKS_PER_REV;
             if (lines != 0) {
                 data->out_accum_scaled -= lines * TICKS_PER_REV;
-                data->out_pending += lines; /* wheel_flush() paces the reports */
+                data->out_pending += lines; /* wheel_flush() drips the events */
+                const int32_t qmax = DT_INST_PROP(0, wheel_queue_max);
+                data->out_pending = CLAMP(data->out_pending, -qmax, qmax);
             }
             if (steps != 0) {
                 /* detents are texture only in scroll mode */

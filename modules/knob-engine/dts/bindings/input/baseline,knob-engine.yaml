@@ -60,11 +60,17 @@ properties:
 
   wheel-max-lines-per-report:
     type: int
-    default: 4
+    default: 0
+    description: unused since the unit-event drip; kept for config compatibility
+
+  wheel-queue-max:
+    type: int
+    default: 32
     description: |
-      Hard velocity ceiling: lines beyond this per report window are DROPPED.
-      Tames flywheel flicks whose physical inertia would otherwise stack with
-      host-side scroll acceleration. 0 disables the ceiling.
+      Max scroll units queued for the drip. Units beyond this are dropped so
+      a hard flick can't bank output that keeps scrolling after the knob
+      stops. Also the effective velocity ceiling together with
+      wheel-report-interval-ms (rate = 1000/interval events per second).
 
 child-binding:
   description: Per-layer knob profile

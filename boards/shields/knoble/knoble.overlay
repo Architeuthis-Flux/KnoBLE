@@ -69,11 +69,11 @@
         led-strip = <&led_strip>;   /* speed gauge; underglow is disabled */
         poll-hz = <250>;
         idle-poll-hz = <25>;
-        /* no firmware velocity ceiling: output tracks rotation 1:1; short
-         * pooling window = many small reports rather than few big ones, so
-         * app-side per-event scroll animation can't snowball */
-        wheel-report-interval-ms = <10>;
-        wheel-max-lines-per-report = <0>;
+        /* Scroll goes out as +/-1 unit events, one per interval — hosts in
+         * fixed-pixel mode (LinearMouse) only honor event sign, so rate IS
+         * the speed. 5ms = up to 200 units/s; pair with LinearMouse "6px"
+         * => ~1200px/s ceiling. */
+        wheel-report-interval-ms = <5>;
 
         /* Slider 0: pot wiper on P0.31 (silkscreen 031) = AIN7.
          * !! Power the pot from the 3.3V VCC pin, NOT RAW — the nRF's analog
@@ -84,9 +84,10 @@
             layer = <0>;
             mode = "scroll";
             detents-per-rev = <16>;   /* haptic/texture grid */
-            lines-per-rev = <384>;    /* fine output units (~0.94deg each);
-                                       * pair with LinearMouse pixel-mode
-                                       * (4px/unit -> ~1500px per rev at x1) */
+            lines-per-rev = <96>;     /* output units per rev; with the 5ms
+                                       * unit-event drip and LinearMouse 8px:
+                                       * 1 rev = ~770px at x1, ceiling at
+                                       * ~2 rps worth of events */
             haptic-effect = <1>;              /* TI lib 6: strong click 100% */
             input-code = <INPUT_REL_WHEEL>;
             /* slider sets scroll speed, bottom to top:
