@@ -149,6 +149,10 @@ struct knob_data {
     int32_t cached_speed;
     uint8_t slider_tick;
 
+    /* scroll output pooled between rate-limited HID reports */
+    int32_t out_pending;
+    int64_t last_flush_ms;
+
 #if KNOB_HAS_SLIDERS
     struct slider_state sliders[NUM_SLIDERS];
     bool adc_ready;
@@ -433,9 +437,8 @@ static void emit_steps(struct knob_data *data, const struct knob_profile *prof, 
             out = data->wheel_pending / div;
             data->wheel_pending -= out * div;
         }
-        if (out != 0) {
-            input_report_rel(data->dev, prof->input_code, out, true, K_NO_WAIT);
-        }
+        /* pool output; wheel_flush() paces the actual HID reports */
+        data->out_pending += out;
         /* the physical detent feel stays 1:1 regardless of speed */
         haptic_fire(prof->haptic_effect);
         break;
@@ -473,6 +476,22 @@ static void emit_steps(struct knob_data *data, const struct knob_profile *prof, 
     }
 }
 
+/* Emit pooled scroll output, at most one report per wheel-report-interval-ms.
+ * Slow turning still reports immediately (the window has long expired by the
+ * next detent); fast spins get summed into few, larger events. */
+static void wheel_flush(struct knob_data *data, bool force) {
+    if (data->out_pending == 0 || data->last_prof == NULL) {
+        return;
+    }
+    int64_t now = k_uptime_get();
+    if (!force && (now - data->last_flush_ms) < DT_INST_PROP(0, wheel_report_interval_ms)) {
+        return;
+    }
+    input_report_rel(data->dev, data->last_prof->input_code, data->out_pending, true, K_NO_WAIT);
+    data->out_pending = 0;
+    data->last_flush_ms = now;
+}
+
 static int knob_read_position(int32_t *out) {
     struct sensor_value val;
     int err = sensor_sample_fetch(knob_sensor);
@@ -501,6 +520,7 @@ static void knob_work_handler(struct k_work *work) {
 
     /* switching modes drops any partial rotation toward the next detent */
     if (prof != data->last_prof) {
+        wheel_flush(data, true); /* drain output under the old profile's code */
         LOG_INF("profile switch -> layer %d (mode %d, %d detents/rev, effect %d)", prof->layer,
                 prof->mode, prof->detents_per_rev, prof->haptic_effect);
         data->last_prof = prof;
@@ -567,6 +587,7 @@ static void knob_work_handler(struct k_work *work) {
             /* own-control sliders report even when the knob is still */
             slider_process(data, prof);
         }
+        wheel_flush(data, false);
     } else {
         data->bus_failures++;
         if (data->bus_failures == BUS_FAIL_BACKOFF_THRESHOLD) {

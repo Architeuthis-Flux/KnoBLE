@@ -49,6 +49,15 @@ properties:
     default: 24
     description: raw ADC counts of hysteresis before a slider change registers
 
+  wheel-report-interval-ms:
+    type: int
+    default: 30
+    description: |
+      Minimum spacing between emitted wheel reports; detent output within a
+      window is summed into one event. Caps the HID event rate so host-side
+      scroll acceleration (e.g. macOS) doesn't amplify fast knob spins.
+      Total scroll distance is unaffected.
+
 child-binding:
   description: Per-layer knob profile
 
