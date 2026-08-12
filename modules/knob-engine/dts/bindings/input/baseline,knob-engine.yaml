@@ -88,6 +88,16 @@ child-binding:
     detents-per-rev:
       type: int
       default: 24
+      description: haptic/texture grid; also the output step for keycode and bounded modes
+
+    lines-per-rev:
+      type: int
+      default: 0
+      description: |
+        Scroll-mode output resolution, decoupled from the detent grid: lines
+        emitted per full revolution at 1x speed. Finer than detents-per-rev
+        keeps the page tracking the knob between clicks. 0 = one line per
+        detent (legacy coupling).
 
     haptic-effect:
       type: int

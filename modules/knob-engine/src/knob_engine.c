@@ -73,6 +73,7 @@ struct knob_profile {
     uint8_t layer;
     uint8_t mode;
     uint16_t detents_per_rev;
+    uint16_t lines_per_rev;
     uint8_t haptic_effect;
     uint16_t input_code;
     uint32_t cw_code;
@@ -95,6 +96,7 @@ struct knob_profile {
         .layer = DT_PROP(node, layer),                                                             \
         .mode = DT_ENUM_IDX(node, mode),                                                           \
         .detents_per_rev = DT_PROP(node, detents_per_rev),                                         \
+        .lines_per_rev = DT_PROP(node, lines_per_rev),                                         \
         .haptic_effect = DT_PROP(node, haptic_effect),                                             \
         .input_code = DT_PROP(node, input_code),                                                   \
         .cw_code = DT_PROP(node, cw_code),                                                         \
@@ -136,16 +138,14 @@ struct knob_data {
 
     /* rotation tracking, in raw sensor ticks (1/4096 rev) */
     int32_t last_pos;
-    int32_t accum_scaled; /* accumulated (delta * detents_per_rev) */
+    int32_t accum_scaled;     /* accumulated (delta * detents_per_rev) — haptics/keycodes */
+    int32_t out_accum_scaled; /* accumulated (delta * effective lines_per_rev) — scroll */
     const struct knob_profile *last_prof;
     bool pos_valid;
 
     /* bounded-mode position, in detent steps */
     int32_t bounded_pos;
     int64_t last_endstop_ms;
-
-    /* sub-1x wheel speed: detents banked toward the next emitted line */
-    int32_t wheel_pending;
 
     /* wheel-scale speed sampled continuously so the LED gauge is live */
     int32_t cached_speed;
@@ -434,24 +434,6 @@ static void emit_steps(struct knob_data *data, const struct knob_profile *prof, 
     }
 
     switch (prof->mode) {
-    case KNOB_MODE_SCROLL: {
-        int32_t out;
-        if (speed >= 1) {
-            out = steps * speed;
-        } else {
-            /* sub-1x: bank detents, emit one line per |speed| of them */
-            const int32_t div = -speed;
-            data->wheel_pending += steps;
-            out = data->wheel_pending / div;
-            data->wheel_pending -= out * div;
-        }
-        /* pool output; wheel_flush() paces the actual HID reports */
-        data->out_pending += out;
-        /* the physical detent feel stays 1:1 regardless of speed */
-        haptic_fire(prof->haptic_effect);
-        break;
-    }
-
     case KNOB_MODE_KEYCODE:
         for (int32_t i = 0; i < KNOB_ABS(steps); i++) {
             tap_keycode(steps > 0 ? prof->cw_code : prof->ccw_code);
@@ -541,7 +523,7 @@ static void knob_work_handler(struct k_work *work) {
                 prof->mode, prof->detents_per_rev, prof->haptic_effect);
         data->last_prof = prof;
         data->accum_scaled = 0;
-        data->wheel_pending = 0;
+        data->out_accum_scaled = 0;
         if (prof->slider_role == SLIDER_ROLE_WHEEL_SCALE) {
             leds_show_speed(prof, data->cached_speed);
         } else {
@@ -587,16 +569,34 @@ static void knob_work_handler(struct k_work *work) {
 #endif
         /* exact integer detent quantizer: accumulate delta * detents, one
          * step per full TICKS_PER_REV of accumulated product */
+        /* detent quantizer: drives haptics, and output for keycode/bounded */
         data->accum_scaled += delta * (int32_t)MAX(prof->detents_per_rev, 1);
         int32_t steps = data->accum_scaled / TICKS_PER_REV;
-
         if (steps != 0) {
             data->accum_scaled -= steps * TICKS_PER_REV;
-            /* wheel-scale speed comes from the continuous sampling above */
-            int32_t speed = (prof->slider_role == SLIDER_ROLE_WHEEL_SCALE)
-                                ? data->cached_speed
-                                : slider_process(data, prof);
-            /* speed +M = M lines/detent; -D = one line per D detents */
+        }
+
+        if (prof->mode == KNOB_MODE_SCROLL) {
+            /* Scroll output runs on its own, finer quantizer so the page
+             * tracks the knob between detent clicks. Slider speed scales
+             * the effective resolution: x2 doubles lines/rev, /2 halves. */
+            const int32_t speed = data->cached_speed != 0 ? data->cached_speed : 1;
+            int32_t lpr = prof->lines_per_rev > 0 ? prof->lines_per_rev : prof->detents_per_rev;
+            lpr = (speed >= 1) ? (lpr * speed) : MAX(lpr / -speed, 1);
+
+            data->out_accum_scaled += delta * lpr;
+            int32_t lines = data->out_accum_scaled / TICKS_PER_REV;
+            if (lines != 0) {
+                data->out_accum_scaled -= lines * TICKS_PER_REV;
+                data->out_pending += lines; /* wheel_flush() paces the reports */
+            }
+            if (steps != 0) {
+                /* detents are texture only in scroll mode */
+                LOG_DBG("detent %+d at pos %d (speed %+d)", steps, pos, speed);
+                haptic_fire(prof->haptic_effect);
+            }
+        } else if (steps != 0) {
+            int32_t speed = slider_process(data, prof);
             LOG_DBG("detent %+d at pos %d (mode %d, speed %+d)", steps, pos, prof->mode, speed);
             emit_steps(data, prof, steps, speed);
         } else if (prof->slider_role == SLIDER_ROLE_OWN_CONTROL) {

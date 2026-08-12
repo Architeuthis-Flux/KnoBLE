@@ -81,7 +81,9 @@
         profile_scroll {
             layer = <0>;
             mode = "scroll";
-            detents-per-rev = <16>;
+            detents-per-rev = <16>;   /* haptic/texture grid */
+            lines-per-rev = <96>;     /* output resolution: page tracks the
+                                       * knob ~every 3.75 degrees at x1 */
             haptic-effect = <1>;              /* TI lib 6: strong click 100% */
             input-code = <INPUT_REL_WHEEL>;
             /* slider sets scroll speed, bottom to top:
