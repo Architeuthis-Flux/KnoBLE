@@ -52,19 +52,27 @@ builds `.uf2` artifacts for every entry in `build.yaml`. Download the
 **Local build:**
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install west
-mkdir -p /tmp/knoble-ws/config && cp -R config/* /tmp/knoble-ws/config/
-cd /tmp/knoble-ws && west init -l config && west update
-west build -s zmk/app -b nice_nano_v2 -S zmk-usb-logging -- \
-  -DZMK_CONFIG=/tmp/knoble-ws/config -DSHIELD=knoble \
+mkdir -p /private/tmp/knoble-ws/config && cp -R config/* /private/tmp/knoble-ws/config/
+cd /private/tmp/knoble-ws && python3 -m venv .venv && .venv/bin/pip install west
+.venv/bin/west init -l config && .venv/bin/west update
+.venv/bin/pip install -r zephyr/scripts/requirements-base.txt
+.venv/bin/west zephyr-export
+.venv/bin/west build -s zmk/app -b nice_nano_v2 -S zmk-usb-logging -- \
+  -DZMK_CONFIG=/private/tmp/knoble-ws/config -DSHIELD=knoble \
   -DZMK_EXTRA_MODULES=<absolute path to this repo>
 # firmware: build/zephyr/zmk.uf2
+# hires (Windows/Linux) variant: -d build-hires, drop -S zmk-usb-logging,
+# append -DCONFIG_ZMK_POINTING_SMOOTH_SCROLLING=y
 ```
 
-Needs cmake, ninja, dtc, and a Zephyr SDK ARM toolchain
-(`ZEPHYR_SDK_INSTALL_DIR`; run `west zephyr-export` once, or pass
-`-DZephyr_DIR=<ws>/zephyr/share/zephyr-package/cmake`). Drop
+Needs cmake, ninja, dtc, and a Zephyr SDK ARM toolchain (installed at
+`~/zephyr-sdk-0.17.0`, found via the CMake user package registry). Drop
 `-S zmk-usb-logging` for a production build without the debug console.
+Gotchas relearned the hard way: `west zephyr-export` is required (passing
+`-DZephyr_DIR` fails on macOS — `/tmp` is a symlink to `/private/tmp` and
+Zephyr's package version check compares workspace paths); the venv needs
+`requirements-base.txt` on top of west (`elftools` errors otherwise); and
+`/tmp` is wiped on reboot, so expect to rebuild the workspace.
 
 ### Flashing
 
@@ -115,6 +123,15 @@ brew install --cask linearmouse
 ⚠️ Touching this device's sliders in the LinearMouse **GUI rewrites the
 scheme** — edit the JSON instead (it hot-reloads). Without LinearMouse the
 knob still works everywhere as a plain mouse wheel, just without the glide.
+
+### Host setup (Windows / Linux — experimental hi-res build)
+
+The `knoble_hires` artifact enables ZMK's smooth scrolling (HID Resolution
+Multiplier ×16). Windows and Linux honor the multiplier natively: same
+scroll pacing, 16× finer steps, no host software and no OS acceleration.
+**Do not pair the hires build with a Mac** — macOS ignores the multiplier
+and scrolls 16× too fast. Status and test notes:
+`docs/scroll-feel-handoff.md`.
 
 ## Controls
 

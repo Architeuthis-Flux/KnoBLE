@@ -11,6 +11,19 @@ config KNOB_ENGINE_INIT_PRIORITY
     int "Init priority"
     default 91
 
+config KNOB_WHEEL_RES_MULTIPLIER
+    int
+    default 16 if ZMK_POINTING_SMOOTH_SCROLLING
+    default 1
+    help
+      Wheel sub-units emitted per count. Tracks ZMK's smooth scrolling
+      (HID Resolution Multiplier, x16 descriptor): hosts that honor the
+      multiplier (Windows, Linux) divide our values by 16, so pacing is
+      unchanged but 16x finer-grained. Hosts that ignore it (macOS) see
+      raw sub-units as whole notches — 16x too fast — so only enable
+      ZMK_POINTING_SMOOTH_SCROLLING in builds aimed at hosts that honor
+      the multiplier.
+
 module = KNOB_ENGINE
 module-str = knob_engine
 source "subsys/logging/Kconfig.template.log_config"

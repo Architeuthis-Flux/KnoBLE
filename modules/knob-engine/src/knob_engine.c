@@ -69,6 +69,16 @@ LOG_MODULE_REGISTER(knob_engine, CONFIG_KNOB_ENGINE_LOG_LEVEL);
 enum knob_mode { KNOB_MODE_SCROLL, KNOB_MODE_KEYCODE, KNOB_MODE_BOUNDED };
 enum slider_role { SLIDER_ROLE_NONE, SLIDER_ROLE_WHEEL_SCALE, SLIDER_ROLE_OWN_CONTROL };
 
+/* Sub-units per count for wheel-type codes. 16 when ZMK's smooth scrolling
+ * (HID Resolution Multiplier) is on: multiplier-honoring hosts divide by 16,
+ * so pacing is preserved at 16x granularity. Only REL_WHEEL/REL_HWHEEL pass
+ * through ZMK's resolution scaling — never scale other codes. */
+static inline int32_t wheel_units(uint16_t code) {
+    return (code == INPUT_REL_WHEEL || code == INPUT_REL_HWHEEL)
+               ? CONFIG_KNOB_WHEEL_RES_MULTIPLIER
+               : 1;
+}
+
 struct knob_profile {
     uint8_t layer;
     uint8_t mode;
@@ -390,7 +400,8 @@ static int32_t slider_process(struct knob_data *data, const struct knob_profile 
         if (sl->valid && bucket != sl->bucket) {
             LOG_DBG("slider %d: raw %d -> bucket %d (%+d)", prof->slider_index, raw, bucket,
                     bucket - sl->bucket);
-            input_report_rel(data->dev, prof->slider_input_code, bucket - sl->bucket, true,
+            input_report_rel(data->dev, prof->slider_input_code,
+                             (bucket - sl->bucket) * wheel_units(prof->slider_input_code), true,
                              K_NO_WAIT);
             haptic_fire(prof->slider_effect);
         }
@@ -449,7 +460,9 @@ static void emit_steps(struct knob_data *data, const struct knob_profile *prof, 
         if (moved != 0) {
             /* bounded mode ignores sub-1x speeds; dividers make no sense
              * against a hard-clamped position */
-            input_report_rel(data->dev, prof->input_code, moved * MAX(speed, 1), true, K_NO_WAIT);
+            input_report_rel(data->dev, prof->input_code,
+                             moved * MAX(speed, 1) * wheel_units(prof->input_code), true,
+                             K_NO_WAIT);
             haptic_fire(prof->haptic_effect);
         }
         if (moved != steps) { /* clipped at an end-stop */
@@ -577,6 +590,8 @@ static void knob_work_handler(struct k_work *work) {
              * the effective resolution: x2 doubles lines/rev, /2 halves. */
             const int32_t speed = data->cached_speed != 0 ? data->cached_speed : 1;
             int32_t lpr = prof->lines_per_rev > 0 ? prof->lines_per_rev : prof->detents_per_rev;
+            /* hi-res sub-units first so slider dividers keep their precision */
+            lpr *= wheel_units(prof->input_code);
             lpr = (speed >= 1) ? (lpr * speed) : MAX(lpr / -speed, 1);
 
             data->out_accum_scaled += delta * lpr;
@@ -584,7 +599,8 @@ static void knob_work_handler(struct k_work *work) {
             if (lines != 0) {
                 data->out_accum_scaled -= lines * TICKS_PER_REV;
                 data->out_pending += lines; /* wheel_flush() drips the events */
-                const int32_t qmax = DT_INST_PROP(0, wheel_queue_max);
+                const int32_t qmax = DT_INST_PROP(0, wheel_queue_max) *
+                                     wheel_units(prof->input_code);
                 data->out_pending = CLAMP(data->out_pending, -qmax, qmax);
             }
             if (steps != 0) {

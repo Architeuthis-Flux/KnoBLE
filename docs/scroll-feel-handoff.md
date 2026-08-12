@@ -150,6 +150,79 @@ Recommended order: (1) hi-res wheel experiment on Windows/Linux, (2) macOS
 stays LinearMouse for now, (3) companion app only when the PCB/product
 settles — it's also the runtime-settings answer, so design them together.
 
+## Hi-res wheel: implemented (2026-08-12), needs Windows/Linux hardware test
+
+Step (1) above is now built. Source-verified findings on ZMK v0.3, then
+what changed in this repo.
+
+### How ZMK v0.3's smooth scrolling actually works (source-verified)
+
+`CONFIG_ZMK_POINTING_SMOOTH_SCROLLING` exists in v0.3 and is wired
+end-to-end: descriptor + input scaling + feature-report plumbing on both
+transports (`app/src/pointing/resolution_multipliers.c`, `hog.c`,
+`usb_hid.c`, `input_listener.c`).
+
+- **Descriptor**: Resolution Multiplier feature report, logical 0–15 →
+  physical **1–16**, one nibble each for wheel/hwheel, wrapped around the
+  wheel usages. Hi-res hosts (Windows `mouhid`, Linux `hid-core`) write the
+  max logical value at enumeration → multiplier ×16 — on **both USB and BLE**
+  (HOG exposes read/write feature-report characteristics).
+- **The unit contract**: with smooth scrolling on, the event source must
+  emit **16 sub-units per intended notch**. `input_listener.c` stores the
+  host-written value per endpoint and computes `div = 16 - stored`:
+  hosts that wrote 15 get pass-through (div 1) and divide by 16 themselves;
+  hosts that never write (macOS) *also* get pass-through — they interpret
+  sub-units as whole notches → **16× too fast. The hires build must never
+  face a Mac**; that's why it's a separate artifact, not a default.
+- **Latent upstream bug** (v0.3 AND current main, `apply_resolution_scaling`):
+  the divided value is computed but discarded (`evt->value = val`, not
+  `scaled`) — the div≠1 path emits ever-growing cumulative values. Dormant
+  in practice because real hosts write 15 (div=1, pass-through) or nothing.
+  Only a host explicitly writing 0 would trigger it. Know it exists; don't
+  debug "runaway scroll on weird host" from scratch.
+- ZMK's stored multiplier defaults to 15 per endpoint (pass-through), so
+  behavior before any host write is identical to the multiplier being fully
+  enabled — the firmware never rescales on its own.
+
+### What changed in this repo
+
+One Kconfig knob, auto-set — no overlay fork, no second shield:
+
+- `modules/knob-engine/Kconfig`: `KNOB_WHEEL_RES_MULTIPLIER` (promptless)
+  = **16 when `ZMK_POINTING_SMOOTH_SCROLLING` is on, else 1**.
+- `knob_engine.c`: `wheel_units(code)` scales every wheel-code emission —
+  scroll `lines-per-rev` (multiplied *before* slider divider math so /5
+  keeps its precision), the `wheel-queue-max` clamp, bounded-mode moves,
+  and own-control slider buckets. Only `INPUT_REL_WHEEL`/`INPUT_REL_HWHEEL`
+  scale (those are the codes ZMK resolution-scales); keycode mode untouched.
+  The default build multiplies by 1 everywhere — behavior unchanged.
+- `build.yaml`: new `knoble_hires` artifact
+  (`-DCONFIG_ZMK_POINTING_SMOOTH_SCROLLING=y`).
+
+Net effect on a multiplier-honoring host: same pacing as today (48
+notches/rev at ×1), but delivered as 768 sub-units/rev — sub-notch-smooth,
+linear, no OS acceleration, **zero host software**.
+
+### Test procedure (needs the physical knob — Kevin)
+
+1. Flash `knoble_hires` (build locally or grab the CI artifact).
+2. **Windows**: pair over BLE, scroll in Chrome/VS Code/Word (apps with
+   smooth scrolling). Expect: fluid sub-notch tracking, same overall
+   distance per rev as the default build. Failure mode to watch: everything
+   scrolls ~16× too far/fast → Windows didn't write the multiplier over
+   BLE → retest on USB to isolate transport.
+3. **Linux**: `sudo libinput debug-events` — `POINTER_SCROLL_WHEEL` events
+   should show fractional v120 values (~7.5 per sub-unit); or `evtest` on
+   the device node should list `REL_WHEEL_HI_RES`. Same 16×-too-fast
+   failure check as Windows.
+4. Slider sweep ÷5…×4 and the volume layer should feel unchanged in pacing.
+   If pacing reads a few percent off or slightly uneven on Windows/Linux,
+   suspect host-side integer handling of the fractional notch unit (the ×16
+   multiplier doesn't divide the 120-unit notch evenly: 120/16 = 7.5 per
+   sub-unit) — a descriptor-level property, not a knob-engine bug.
+5. Report back: transport tested (BLE/USB), app, verdict per OS — goes in
+   this doc, decides whether hires becomes the default for non-Mac users.
+
 ## Context links
 
 - Firmware repo layout, build, flash, pin map: `../README.md`

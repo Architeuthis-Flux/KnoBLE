@@ -9,3 +9,11 @@ include:
     snippet: studio-rpc-usb-uart
     cmake-args: -DCONFIG_ZMK_STUDIO=y
     artifact-name: knoble_studio
+  # Hi-res wheel (HID Resolution Multiplier) experiment: Windows/Linux honor
+  # the multiplier and get smooth, acceleration-free 16x-fine scrolling
+  # natively. macOS ignores it and would scroll 16x too fast — do NOT pair
+  # this build with a Mac. See docs/scroll-feel-handoff.md.
+  - board: nice_nano_v2
+    shield: knoble
+    cmake-args: -DCONFIG_ZMK_POINTING_SMOOTH_SCROLLING=y
+    artifact-name: knoble_hires
