@@ -466,24 +466,22 @@ static void emit_steps(struct knob_data *data, const struct knob_profile *prof, 
     }
 }
 
-/* Drip pooled scroll output as UNIT (+/-1) events, one per
- * wheel-report-interval-ms. Hosts that replace wheel events with a fixed
- * pixel distance (LinearMouse pixel mode) only honor the event's sign, so
- * speed must be carried by event RATE, not magnitude. The queue is capped:
- * excess is dropped so the page never keeps coasting after the knob stops. */
+/* Report pooled scroll output like a normal mouse: wheel COUNTS per report
+ * at a mouse-like cadence (a real 125Hz mouse also packs multiple detents
+ * into one report when spun fast). The host's standard wheel handling —
+ * and any smoothing the user runs (LinearMouse smoothed mode) — then apply
+ * exactly as they would to any mouse. */
 static void wheel_flush(struct knob_data *data, bool force) {
-    ARG_UNUSED(force);
     if (data->out_pending == 0 || data->last_prof == NULL) {
         return;
     }
     int64_t now = k_uptime_get();
-    if ((now - data->last_flush_ms) < DT_INST_PROP(0, wheel_report_interval_ms)) {
+    if (!force && (now - data->last_flush_ms) < DT_INST_PROP(0, wheel_report_interval_ms)) {
         return;
     }
 
-    int32_t step = data->out_pending > 0 ? 1 : -1;
-    input_report_rel(data->dev, data->last_prof->input_code, step, true, K_NO_WAIT);
-    data->out_pending -= step;
+    input_report_rel(data->dev, data->last_prof->input_code, data->out_pending, true, K_NO_WAIT);
+    data->out_pending = 0;
     data->last_flush_ms = now;
 }
 

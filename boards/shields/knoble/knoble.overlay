@@ -69,10 +69,8 @@
         led-strip = <&led_strip>;   /* speed gauge; underglow is disabled */
         poll-hz = <250>;
         idle-poll-hz = <25>;
-        /* Scroll goes out as +/-1 unit events, one per interval — hosts in
-         * fixed-pixel mode (LinearMouse) only honor event sign, so rate IS
-         * the speed. 8ms = 125 events/s ceiling (standard BLE mouse report
-         * rate; idle knob sends nothing). Pair with LinearMouse "10px". */
+        /* Mouse-style reporting: wheel counts pooled into reports at 125Hz
+         * cadence (idle knob sends nothing). */
         wheel-report-interval-ms = <8>;
 
         /* Slider 0: pot wiper on P0.31 (silkscreen 031) = AIN7.
@@ -84,10 +82,9 @@
             layer = <0>;
             mode = "scroll";
             detents-per-rev = <16>;   /* haptic/texture grid */
-            lines-per-rev = <96>;     /* output units per rev; with the 5ms
-                                       * unit-event drip and LinearMouse 8px:
-                                       * 1 rev = ~770px at x1, ceiling at
-                                       * ~2 rps worth of events */
+            lines-per-rev = <48>;     /* wheel counts per rev at x1 — like a
+                                       * mouse wheel with 48 notches; host
+                                       * scroll handling applies as normal */
             haptic-effect = <1>;              /* TI lib 6: strong click 100% */
             input-code = <INPUT_REL_WHEEL>;
             /* slider sets scroll speed, bottom to top:
