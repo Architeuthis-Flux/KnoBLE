@@ -82,11 +82,13 @@
             haptic-effect = <1>;              /* TI lib 6: strong click 100% */
             input-code = <INPUT_REL_WHEEL>;
             /* slider sets scroll speed, bottom to top:
-             * /5 /4 /3 /2, x1, x2 x3 x4 */
+             * /5 /4 /3 /2, x1, x2 x3 x4 — quadratic curve, so ~70% of the
+             * pot travel stays at 1x or slower; multipliers need a crank */
             slider-role = "wheel-scale";
             slider-index = <0>;
             wheel-scale-max = <4>;
             wheel-scale-min-div = <5>;
+            slider-curve-power = <2>;
         };
 
         profile_volume {

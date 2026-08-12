@@ -163,3 +163,12 @@ child-binding:
         max divider when slider-role is wheel-scale (slider at bottom):
         the knob emits one output per this many detents. 1 = low end is
         normal 1x speed (no sub-speed range).
+
+    slider-curve-power:
+      type: int
+      default: 1
+      description: |
+        Response curve of the wheel-scale slider. 1 = linear travel across
+        the speed notches; 2 (quadratic) or 3 (cubic) bias most of the pot
+        travel toward the slow end, reaching the top multipliers only when
+        cranked.

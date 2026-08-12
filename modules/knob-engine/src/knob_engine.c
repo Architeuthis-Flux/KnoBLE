@@ -87,6 +87,7 @@ struct knob_profile {
     uint8_t slider_effect;
     uint8_t wheel_scale_max;
     uint8_t wheel_scale_min_div;
+    uint8_t slider_curve_power;
 };
 
 #define KNOB_PROFILE_ENTRY(node)                                                                   \
@@ -108,6 +109,7 @@ struct knob_profile {
         .slider_effect = DT_PROP(node, slider_effect),                                             \
         .wheel_scale_max = DT_PROP(node, wheel_scale_max),                                         \
         .wheel_scale_min_div = DT_PROP(node, wheel_scale_min_div),                                 \
+        .slider_curve_power = DT_PROP(node, slider_curve_power),                                   \
     },
 
 static const struct knob_profile profiles[] = {DT_INST_FOREACH_CHILD(0, KNOB_PROFILE_ENTRY)};
@@ -361,12 +363,18 @@ static int32_t slider_process(struct knob_data *data, const struct knob_profile 
     switch (prof->slider_role) {
     case SLIDER_ROLE_WHEEL_SCALE: {
         /* Map slider travel onto notches spanning /min_div ... x max_mult,
-         * e.g. min-div 10, max 8: /10 /9 ... /2, x1, x2 ... x8 */
+         * e.g. min-div 5, max 4: /5 /4 /3 /2, x1, x2 x3 x4 */
         const int32_t max_m = MAX(prof->wheel_scale_max, 1);
         const int32_t min_d = MAX(prof->wheel_scale_min_div, 1);
         const int32_t span = (min_d - 1) + (max_m - 1);
         if (span > 0) {
-            int32_t n = (raw * (span + 1)) / (SLIDER_RAW_MAX + 1);
+            /* curve power > 1 biases travel toward the slow end: the top
+             * multipliers only arrive when the pot is cranked */
+            int32_t curved = raw;
+            for (uint8_t p = 1; p < MAX(prof->slider_curve_power, 1); p++) {
+                curved = (curved * raw) / SLIDER_RAW_MAX;
+            }
+            int32_t n = (curved * (span + 1)) / (SLIDER_RAW_MAX + 1);
             n = MIN(n, span);
             if (n < min_d - 1) {
                 speed = -(min_d - n); /* divider: /min_d at the bottom, /2 mid */
