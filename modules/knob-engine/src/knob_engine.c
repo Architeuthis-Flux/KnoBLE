@@ -317,6 +317,32 @@ static bool pot_role_is_speed(void) {
 #endif
 }
 
+/* True when the profile's wheel-scale slider is NOT the settings pot: a
+ * dual-pot build where speed has its own dedicated slider. */
+static bool speed_slider_is_fixed(const struct knob_profile *prof) {
+#if IS_ENABLED(CONFIG_KNOB_SETTINGS)
+    return prof->slider_index != DT_INST_PROP(0, settings_pot_index);
+#else
+    ARG_UNUSED(prof);
+    return false;
+#endif
+}
+
+#if IS_ENABLED(CONFIG_KNOB_SETTINGS)
+/* For GET_INFO: lets the app hide the "scroll speed" role when speed has a
+ * dedicated hardware slider. */
+bool knob_engine_has_fixed_speed(void) {
+    for (size_t i = 0; i < ARRAY_SIZE(profiles); i++) {
+        if (profiles[i].mode == KNOB_MODE_SCROLL &&
+            profiles[i].slider_role == SLIDER_ROLE_WHEEL_SCALE &&
+            speed_slider_is_fixed(&profiles[i])) {
+            return true;
+        }
+    }
+    return false;
+}
+#endif
+
 #if KNOB_HAS_SLIDERS
 
 static int slider_adc_init(struct knob_data *data) {
@@ -391,15 +417,19 @@ static int32_t slider_process(struct knob_data *data, const struct knob_profile 
 
     switch (prof->slider_role) {
     case SLIDER_ROLE_WHEEL_SCALE: {
-        /* The physical pot: role + sensitivity are runtime settings when the
-         * settings channel is built in; DT provides fallback/defaults. Each
-         * role keeps its own sensitivity fields — switching never resets. */
+        /* Wheel-scale slider. When it IS the settings pot, its role comes
+         * from the runtime store (h-scroll/volume/off/speed). When the
+         * shield routes wheel-scale to a different slider (dual-pot builds),
+         * this one is FIXED to speed — only the range is runtime-tunable.
+         * Each role keeps its own sensitivity fields. */
         int32_t max_m = MAX(prof->wheel_scale_max, 1);
         int32_t min_d = MAX(prof->wheel_scale_min_div, 1);
         uint8_t role = 0 /* speed */;
 #if IS_ENABLED(CONFIG_KNOB_SETTINGS)
+        const bool is_settings_pot =
+            prof->slider_index == DT_INST_PROP(0, settings_pot_index);
         const struct knob_pot_cfg *pc = knob_settings_pot();
-        role = pc->role;
+        role = is_settings_pot ? pc->role : KNOB_POT_ROLE_SPEED;
         max_m = MAX(pc->speed_max_mult, 1);
         min_d = MAX(pc->speed_min_div, 1);
 
@@ -446,7 +476,10 @@ static int32_t slider_process(struct knob_data *data, const struct knob_profile 
             }
         }
 #if IS_ENABLED(CONFIG_KNOB_SETTINGS)
-        knob_settings_note_pot(raw, (int16_t)speed);
+        if (is_settings_pot) {
+            /* single-pot builds: the speed pot is also the reported pot */
+            knob_settings_note_pot(raw, (int16_t)speed);
+        }
 #endif
         break;
     }
@@ -473,12 +506,74 @@ static int32_t slider_process(struct knob_data *data, const struct knob_profile 
     return speed;
 }
 
+/* Dual-pot builds: the wheel-scale slider above is fixed to speed, and the
+ * settings pot (settings-pot-index) runs its runtime role here — sampled on
+ * the same ~30 Hz tick. Single-pot builds never call this (same index). */
+static void aux_pot_process(struct knob_data *data, const struct knob_profile *prof) {
+#if IS_ENABLED(CONFIG_KNOB_SETTINGS)
+    const uint8_t idx = DT_INST_PROP(0, settings_pot_index);
+    if (!data->adc_ready || idx >= NUM_SLIDERS || idx == prof->slider_index) {
+        return;
+    }
+
+    struct slider_state *sl = &data->sliders[idx];
+    int32_t raw;
+    if (slider_read_raw(slider_channels[idx], &raw) != 0) {
+        return;
+    }
+    const int32_t deadband = DT_INST_PROP(0, slider_deadband);
+    if (sl->valid && KNOB_ABS(raw - sl->raw) < deadband) {
+        raw = sl->raw;
+    }
+
+    const struct knob_pot_cfg *pc = knob_settings_pot();
+    switch (pc->role) {
+    case KNOB_POT_ROLE_HSCROLL:
+    case KNOB_POT_ROLE_VOLUME: {
+        const int32_t steps = MAX(pc->steps, 2);
+        int32_t bucket = (raw * steps) / (SLIDER_RAW_MAX + 1);
+        if (sl->valid && bucket != sl->bucket) {
+            const int32_t delta = bucket - sl->bucket;
+            if (pc->role == KNOB_POT_ROLE_HSCROLL) {
+                input_report_rel(data->dev, INPUT_REL_HWHEEL,
+                                 delta * wheel_units(INPUT_REL_HWHEEL), true, K_NO_WAIT);
+            } else {
+                for (int32_t i = 0; i < KNOB_ABS(delta); i++) {
+                    tap_keycode(delta > 0 ? C_VOL_UP : C_VOL_DN);
+                }
+            }
+            haptic_fire(prof->slider_effect);
+        }
+        sl->bucket = bucket;
+        knob_settings_note_pot(raw, (int16_t)bucket);
+        break;
+    }
+    default:
+        /* SPEED is owned by the fixed slider in dual-pot builds; treat as
+         * off here. OFF likewise: just keep the live value fresh. */
+        knob_settings_note_pot(raw, 0);
+        break;
+    }
+
+    sl->raw = raw;
+    sl->valid = true;
+#else
+    ARG_UNUSED(data);
+    ARG_UNUSED(prof);
+#endif /* CONFIG_KNOB_SETTINGS */
+}
+
 #else /* !KNOB_HAS_SLIDERS */
 
 static int32_t slider_process(struct knob_data *data, const struct knob_profile *prof) {
     ARG_UNUSED(data);
     ARG_UNUSED(prof);
     return 1; /* plain 1:1 speed */
+}
+
+static void aux_pot_process(struct knob_data *data, const struct knob_profile *prof) {
+    ARG_UNUSED(data);
+    ARG_UNUSED(prof);
 }
 
 #endif /* KNOB_HAS_SLIDERS */
@@ -588,7 +683,8 @@ static void knob_work_handler(struct k_work *work) {
         data->last_prof = prof;
         data->accum_scaled = 0;
         data->out_accum_scaled = 0;
-        if (prof->slider_role == SLIDER_ROLE_WHEEL_SCALE && pot_role_is_speed()) {
+        if (prof->slider_role == SLIDER_ROLE_WHEEL_SCALE &&
+            (speed_slider_is_fixed(prof) || pot_role_is_speed())) {
             leds_show_speed(prof, data->cached_speed);
         } else {
             leds_off(); /* gauge only means something for the speed role */
@@ -602,12 +698,15 @@ static void knob_work_handler(struct k_work *work) {
         if (speed != data->cached_speed) {
             data->cached_speed = speed;
             LOG_INF("speed -> %+d", speed);
-            if (pot_role_is_speed()) {
+            /* Gauge follows the speed slider; in dual-pot builds that's the
+             * fixed one, so the gauge is always meaningful. */
+            if (speed_slider_is_fixed(prof) || pot_role_is_speed()) {
                 leds_show_speed(prof, speed);
             } else {
                 leds_off();
             }
         }
+        aux_pot_process(data, prof); /* dual-pot: the remappable one */
     }
 
     if (knob_read_position(&pos) == 0) {

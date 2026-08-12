@@ -171,6 +171,7 @@ static void handle_frame(const uint8_t *in, uint8_t *reply) {
     case KNOB_CMD_GET_INFO:
         reply[3] = KNOB_PROTO_VERSION;
         reply[4] = KNOB_KEY_SLOTS;
+        reply[5] = knob_engine_has_fixed_speed() ? 0x01 : 0x00; /* flags */
         break;
 
     case KNOB_CMD_GET_KEY: {
@@ -223,11 +224,14 @@ static void handle_frame(const uint8_t *in, uint8_t *reply) {
             break;
         }
         knob_cfg.pot.role = role;
-        if (role == KNOB_POT_ROLE_SPEED && in[3] >= 1 && in[4] >= 1) {
+        /* Any valid field updates its role's dial; zeros leave it alone.
+         * (Dual-pot builds tune the FIXED speed slider's range through the
+         * speed fields while the settings pot runs another role.) */
+        if (in[3] >= 1 && in[4] >= 1) {
             knob_cfg.pot.speed_max_mult = in[3];
             knob_cfg.pot.speed_min_div = in[4];
-        } else if ((role == KNOB_POT_ROLE_HSCROLL || role == KNOB_POT_ROLE_VOLUME) &&
-                   in[5] >= 2) {
+        }
+        if (in[5] >= 2) {
             knob_cfg.pot.steps = in[5];
         }
         LOG_INF("pot cfg -> role %d, /%d..x%d, %d steps (staged)", knob_cfg.pot.role,

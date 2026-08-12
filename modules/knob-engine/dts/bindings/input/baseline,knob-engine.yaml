@@ -49,6 +49,15 @@ properties:
     default: 24
     description: raw ADC counts of hysteresis before a slider change registers
 
+  settings-pot-index:
+    type: int
+    default: 0
+    description: |
+      Index into slider-channels of the runtime-remappable pot (roles set
+      over the settings channel). When the scroll profile's wheel-scale
+      slider is a DIFFERENT index, that slider is fixed to speed and this
+      one is free for horizontal-scroll/volume/off duty.
+
   wheel-report-interval-ms:
     type: int
     default: 30

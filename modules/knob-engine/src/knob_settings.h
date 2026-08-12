@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #define KNOB_KEY_SLOTS 3
@@ -31,3 +32,7 @@ const struct knob_pot_cfg *knob_settings_pot(void);
 /* Engine -> settings: latest pot sample, for live reporting to the host.
  * semantic: signed speed for the speed role, bucket index otherwise. */
 void knob_settings_note_pot(int32_t raw, int16_t semantic);
+
+/* Engine -> settings, for GET_INFO: whether a dedicated (fixed) speed
+ * slider exists, i.e. the settings pot is free for other roles. */
+bool knob_engine_has_fixed_speed(void);

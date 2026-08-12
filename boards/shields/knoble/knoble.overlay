@@ -77,10 +77,14 @@
          * window stays the same fraction of a revolution (~0.67 rev). */
         wheel-queue-max = <160>;
 
-        /* Slider 0: pot wiper on P0.31 (silkscreen 031) = AIN7.
-         * !! Power the pot from the 3.3V VCC pin, NOT RAW — the nRF's analog
+        /* Slider 0: pot wiper on P0.31 (silkscreen 031) = AIN7 — the
+         * runtime-remappable pot (settings channel: h-scroll/volume/off).
+         * Slider 1: pot wiper on P0.29 (silkscreen 029) = AIN5 — FIXED to
+         * scroll speed (the scroll profile's wheel-scale slider below).
+         * !! Power pots from the 3.3V VCC pin, NOT RAW — the nRF's analog
          * !! input absolute max is VDD+0.3V; a 5V wiper would damage it. */
-        slider-channels = <7>;
+        slider-channels = <7 5>;
+        settings-pot-index = <0>;
 
         profile_scroll {
             layer = <0>;
@@ -102,7 +106,7 @@
              * proportional to rotation; disable macOS's per-device scroll
              * acceleration (LinearMouse) instead of masking it here. */
             slider-role = "wheel-scale";
-            slider-index = <0>;
+            slider-index = <1>;      /* the NEW pot on 029: fixed to speed */
             wheel-scale-max = <4>;
             wheel-scale-min-div = <5>;
             slider-curve-power = <1>;
