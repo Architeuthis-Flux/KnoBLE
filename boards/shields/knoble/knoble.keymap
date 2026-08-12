@@ -6,6 +6,17 @@
 #include <dt-bindings/zmk/rgb.h>
 
 / {
+    /* Press BOTH keys together -> reboot into the UF2 bootloader
+     * (NICENANO drive mounts; no physical double-tap needed). */
+    combos {
+        compatible = "zmk,combos";
+        combo_bootloader {
+            timeout-ms = <100>;
+            key-positions = <0 1>;
+            bindings = <&bootloader>;
+        };
+    };
+
     keymap {
         compatible = "zmk,keymap";
 
