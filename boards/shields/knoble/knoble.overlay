@@ -69,21 +69,21 @@
         poll-hz = <250>;
         idle-poll-hz = <25>;
 
-        /* Sliders: uncomment when pots are populated on A1/A2 (AIN0/AIN5).
-         * Then give a profile a slider-role (examples below). */
-        // slider-channels = <0 5>;
+        /* Slider 0: pot wiper on P0.31 (silkscreen 031) = AIN7.
+         * !! Power the pot from the 3.3V VCC pin, NOT RAW — the nRF's analog
+         * !! input absolute max is VDD+0.3V; a 5V wiper would damage it. */
+        slider-channels = <7>;
 
         profile_scroll {
             layer = <0>;
             mode = "scroll";
-            detents-per-rev = <24>;
+            detents-per-rev = <16>;
             haptic-effect = <1>;              /* TI lib 6: strong click 100% */
             input-code = <INPUT_REL_WHEEL>;
-            /* Slider 0 scales scroll speed (1x..4x):
+            /* slider sets scroll speed: 1x (bottom) .. 4x (top) */
             slider-role = "wheel-scale";
             slider-index = <0>;
             wheel-scale-max = <4>;
-            */
         };
 
         profile_volume {
