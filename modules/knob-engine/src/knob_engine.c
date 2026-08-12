@@ -28,6 +28,12 @@
 #include <zmk/event_manager.h>
 #include <zmk/events/keycode_state_changed.h>
 
+#if IS_ENABLED(CONFIG_KNOB_SETTINGS)
+/* Runtime pot role/sensitivity + live-value reporting (settings channel). */
+#include <dt-bindings/zmk/keys.h>
+#include "knob_settings.h"
+#endif
+
 #if DT_INST_NODE_HAS_PROP(0, slider_channels)
 #include <zephyr/drivers/adc.h>
 #include <hal/nrf_saadc.h>
@@ -298,6 +304,19 @@ static const struct knob_profile *active_profile(void) {
 
 /* ---------------- sliders ---------------- */
 
+static void tap_keycode(uint32_t encoded);
+
+/* The physical slide pot is the WHEEL_SCALE slider of the scroll profile;
+ * with the settings channel built in, its role/sensitivity come from the
+ * runtime store instead of devicetree. Other profiles keep DT behavior. */
+static bool pot_role_is_speed(void) {
+#if IS_ENABLED(CONFIG_KNOB_SETTINGS)
+    return knob_settings_pot()->role == KNOB_POT_ROLE_SPEED;
+#else
+    return true;
+#endif
+}
+
 #if KNOB_HAS_SLIDERS
 
 static int slider_adc_init(struct knob_data *data) {
@@ -372,10 +391,44 @@ static int32_t slider_process(struct knob_data *data, const struct knob_profile 
 
     switch (prof->slider_role) {
     case SLIDER_ROLE_WHEEL_SCALE: {
-        /* Map slider travel onto notches spanning /min_div ... x max_mult,
+        /* The physical pot: role + sensitivity are runtime settings when the
+         * settings channel is built in; DT provides fallback/defaults. Each
+         * role keeps its own sensitivity fields — switching never resets. */
+        int32_t max_m = MAX(prof->wheel_scale_max, 1);
+        int32_t min_d = MAX(prof->wheel_scale_min_div, 1);
+        uint8_t role = 0 /* speed */;
+#if IS_ENABLED(CONFIG_KNOB_SETTINGS)
+        const struct knob_pot_cfg *pc = knob_settings_pot();
+        role = pc->role;
+        max_m = MAX(pc->speed_max_mult, 1);
+        min_d = MAX(pc->speed_min_div, 1);
+
+        if (role == KNOB_POT_ROLE_HSCROLL || role == KNOB_POT_ROLE_VOLUME) {
+            const int32_t steps = MAX(pc->steps, 2);
+            int32_t bucket = (raw * steps) / (SLIDER_RAW_MAX + 1);
+            if (sl->valid && bucket != sl->bucket) {
+                const int32_t delta = bucket - sl->bucket;
+                if (role == KNOB_POT_ROLE_HSCROLL) {
+                    input_report_rel(data->dev, INPUT_REL_HWHEEL,
+                                     delta * wheel_units(INPUT_REL_HWHEEL), true, K_NO_WAIT);
+                } else {
+                    for (int32_t i = 0; i < KNOB_ABS(delta); i++) {
+                        tap_keycode(delta > 0 ? C_VOL_UP : C_VOL_DN);
+                    }
+                }
+                haptic_fire(prof->slider_effect);
+            }
+            sl->bucket = bucket;
+            knob_settings_note_pot(raw, (int16_t)bucket);
+            break; /* speed stays 1: pot no longer scales scrolling */
+        }
+        if (role == KNOB_POT_ROLE_OFF) {
+            knob_settings_note_pot(raw, 0);
+            break;
+        }
+#endif
+        /* speed role: map travel onto notches spanning /min_div ... x max,
          * e.g. min-div 5, max 4: /5 /4 /3 /2, x1, x2 x3 x4 */
-        const int32_t max_m = MAX(prof->wheel_scale_max, 1);
-        const int32_t min_d = MAX(prof->wheel_scale_min_div, 1);
         const int32_t span = (min_d - 1) + (max_m - 1);
         if (span > 0) {
             /* curve power > 1 biases travel toward the slow end: the top
@@ -392,6 +445,9 @@ static int32_t slider_process(struct knob_data *data, const struct knob_profile 
                 speed = n - (min_d - 1) + 1; /* multiplier: x1 ... x max_m */
             }
         }
+#if IS_ENABLED(CONFIG_KNOB_SETTINGS)
+        knob_settings_note_pot(raw, (int16_t)speed);
+#endif
         break;
     }
 
@@ -532,10 +588,10 @@ static void knob_work_handler(struct k_work *work) {
         data->last_prof = prof;
         data->accum_scaled = 0;
         data->out_accum_scaled = 0;
-        if (prof->slider_role == SLIDER_ROLE_WHEEL_SCALE) {
+        if (prof->slider_role == SLIDER_ROLE_WHEEL_SCALE && pot_role_is_speed()) {
             leds_show_speed(prof, data->cached_speed);
         } else {
-            leds_off(); /* gauge only means something in wheel-scale profiles */
+            leds_off(); /* gauge only means something for the speed role */
         }
     }
 
@@ -546,7 +602,11 @@ static void knob_work_handler(struct k_work *work) {
         if (speed != data->cached_speed) {
             data->cached_speed = speed;
             LOG_INF("speed -> %+d", speed);
-            leds_show_speed(prof, speed);
+            if (pot_role_is_speed()) {
+                leds_show_speed(prof, speed);
+            } else {
+                leds_off();
+            }
         }
     }
 

@@ -36,24 +36,47 @@ enum knob_cmd {
     KNOB_CMD_SET_KEY = 0x03,
     KNOB_CMD_COMMIT = 0x04,
     KNOB_CMD_RESET = 0x05,
+    KNOB_CMD_GET_POT_CFG = 0x06,
+    KNOB_CMD_SET_POT_CFG = 0x07,
+    KNOB_CMD_GET_POT_VALUE = 0x08,
 };
 
-#define KNOB_PROTO_VERSION 1
+#define KNOB_PROTO_VERSION 2
 #define KNOB_STATUS_OK 0
 #define KNOB_STATUS_BAD_ARG 1
 
 /* Defaults mirror the shipped keymap: prev / play-pause / next. */
 static const uint32_t default_key_codes[KNOB_KEY_SLOTS] = {C_PREV, C_PP, C_NEXT};
+/* Pot default mirrors the shipped overlay: speed role, /5 .. x4, 32 steps. */
+static const struct knob_pot_cfg default_pot_cfg = {
+    .role = KNOB_POT_ROLE_SPEED,
+    .speed_max_mult = 4,
+    .speed_min_div = 5,
+    .steps = 32,
+};
 
 static struct {
     uint32_t key_codes[KNOB_KEY_SLOTS];
+    struct knob_pot_cfg pot;
 } knob_cfg;
+
+/* Live pot sample, engine-thread written, USB-thread read; both 32-bit
+ * aligned writes, torn reads are harmless (display only). */
+static volatile int32_t pot_raw_latest = -1;
+static volatile int16_t pot_semantic_latest;
 
 uint32_t knob_settings_key_code(uint8_t slot) {
     if (slot >= KNOB_KEY_SLOTS) {
         return 0;
     }
     return knob_cfg.key_codes[slot];
+}
+
+const struct knob_pot_cfg *knob_settings_pot(void) { return &knob_cfg.pot; }
+
+void knob_settings_note_pot(int32_t raw, int16_t semantic) {
+    pot_raw_latest = raw;
+    pot_semantic_latest = semantic;
 }
 
 /* ---------------- persistence (Zephyr settings / NVS) ---------------- */
@@ -72,6 +95,18 @@ static int knob_settings_set(const char *name, size_t len, settings_read_cb read
         }
         return rc;
     }
+    if (settings_name_steq(name, "pot", NULL)) {
+        if (len != sizeof(knob_cfg.pot)) {
+            return -EINVAL;
+        }
+        int rc = read_cb(cb_arg, &knob_cfg.pot, sizeof(knob_cfg.pot));
+        if (rc >= 0) {
+            LOG_INF("loaded pot cfg: role %d, /%d..x%d, %d steps", knob_cfg.pot.role,
+                    knob_cfg.pot.speed_min_div, knob_cfg.pot.speed_max_mult, knob_cfg.pot.steps);
+            return 0;
+        }
+        return rc;
+    }
     return -ENOENT;
 }
 
@@ -79,6 +114,7 @@ SETTINGS_STATIC_HANDLER_DEFINE(knob, "knob", NULL, knob_settings_set, NULL, NULL
 
 static void knob_settings_save(void) {
     settings_save_one("knob/keys", knob_cfg.key_codes, sizeof(knob_cfg.key_codes));
+    settings_save_one("knob/pot", &knob_cfg.pot, sizeof(knob_cfg.pot));
 }
 
 /* ---------------- raw HID transport (USB, QMK-style) ---------------- */
@@ -166,9 +202,50 @@ static void handle_frame(const uint8_t *in, uint8_t *reply) {
 
     case KNOB_CMD_RESET:
         memcpy(knob_cfg.key_codes, default_key_codes, sizeof(knob_cfg.key_codes));
+        knob_cfg.pot = default_pot_cfg;
         knob_settings_save();
         LOG_INF("settings reset to defaults");
         break;
+
+    case KNOB_CMD_GET_POT_CFG:
+        reply[3] = knob_cfg.pot.role;
+        reply[4] = knob_cfg.pot.speed_max_mult;
+        reply[5] = knob_cfg.pot.speed_min_div;
+        reply[6] = knob_cfg.pot.steps;
+        break;
+
+    case KNOB_CMD_SET_POT_CFG: {
+        /* Per-role sensitivity: only the fields for the selected role are
+         * updated, so switching roles keeps the other role's dial. */
+        const uint8_t role = in[2];
+        if (role > KNOB_POT_ROLE_OFF) {
+            reply[2] = KNOB_STATUS_BAD_ARG;
+            break;
+        }
+        knob_cfg.pot.role = role;
+        if (role == KNOB_POT_ROLE_SPEED && in[3] >= 1 && in[4] >= 1) {
+            knob_cfg.pot.speed_max_mult = in[3];
+            knob_cfg.pot.speed_min_div = in[4];
+        } else if ((role == KNOB_POT_ROLE_HSCROLL || role == KNOB_POT_ROLE_VOLUME) &&
+                   in[5] >= 2) {
+            knob_cfg.pot.steps = in[5];
+        }
+        LOG_INF("pot cfg -> role %d, /%d..x%d, %d steps (staged)", knob_cfg.pot.role,
+                knob_cfg.pot.speed_min_div, knob_cfg.pot.speed_max_mult, knob_cfg.pot.steps);
+        break;
+    }
+
+    case KNOB_CMD_GET_POT_VALUE: {
+        const int32_t raw = pot_raw_latest;
+        if (raw < 0) {
+            reply[2] = KNOB_STATUS_BAD_ARG; /* no sample yet */
+            break;
+        }
+        sys_put_le16((uint16_t)raw, &reply[3]);
+        reply[5] = knob_cfg.pot.role;
+        sys_put_le16((uint16_t)pot_semantic_latest, &reply[6]);
+        break;
+    }
 
     default:
         reply[2] = KNOB_STATUS_BAD_ARG;
@@ -209,6 +286,7 @@ static const struct hid_ops raw_ops = {
 
 static int knob_settings_init(void) {
     memcpy(knob_cfg.key_codes, default_key_codes, sizeof(knob_cfg.key_codes));
+    knob_cfg.pot = default_pot_cfg;
     /* NVS overrides defaults via the settings handler during settings_load()
      * (ZMK calls it at startup for BLE bonds; our handler rides along). */
 
