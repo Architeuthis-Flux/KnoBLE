@@ -1,0 +1,18 @@
+config KNOB_ENGINE
+    bool "KnoBLE knob engine (AS5600 detents + haptics + sliders)"
+    default y
+    depends on DT_HAS_BASELINE_KNOB_ENGINE_ENABLED
+    select SENSOR
+    select INPUT
+
+if KNOB_ENGINE
+
+config KNOB_ENGINE_INIT_PRIORITY
+    int "Init priority"
+    default 91
+
+module = KNOB_ENGINE
+module-str = knob_engine
+source "subsys/logging/Kconfig.template.log_config"
+
+endif

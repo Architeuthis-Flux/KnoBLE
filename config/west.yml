@@ -1,0 +1,22 @@
+manifest:
+  defaults:
+    revision: v0.3
+  remotes:
+    - name: zmkfirmware
+      url-base: https://github.com/zmkfirmware
+    - name: badjeff
+      url-base: https://github.com/badjeff
+  projects:
+    - name: zmk
+      remote: zmkfirmware
+      import: app/west.yml
+    # Pinned to SHAs deliberately: these are small community repos that may
+    # migrate to newer Zephyr at any time. Upgrade on purpose, not by accident.
+    - name: zmk-drv2605-driver
+      remote: badjeff
+      revision: 81a386aa7b9b660de17ee4cc608a0ab9b1e1655f
+    - name: zmk-output-behavior-listener
+      remote: badjeff
+      revision: 92415c775ecf074c4d4463949c3d85560c54c51d
+  self:
+    path: config

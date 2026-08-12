@@ -1,0 +1,133 @@
+description: |
+  BaselineDesign KnoBLE knob engine: polls an AS5600 absolute angle sensor,
+  quantizes rotation into virtual detents, emits input events or keycodes,
+  and fires DRV2605 haptic effects per detent. Child nodes define per-layer
+  profiles; the highest active layer with a matching profile wins, falling
+  back to the first profile.
+
+compatible: "baseline,knob-engine"
+
+properties:
+  sensor:
+    type: phandle
+    required: true
+    description: AS5600 (or any SENSOR_CHAN_ROTATION absolute-angle) sensor device
+
+  haptics:
+    type: phandle
+    description: DRV2605 haptic driver device (badjeff/zmk-drv2605-driver)
+
+  poll-hz:
+    type: int
+    default: 250
+    description: sensor poll rate while the keyboard is active
+
+  idle-poll-hz:
+    type: int
+    default: 25
+    description: sensor poll rate while the keyboard is idle
+
+  invert:
+    type: boolean
+    description: flip the rotation direction
+
+  slider-channels:
+    type: array
+    description: |
+      SAADC AIN channel indexes with slider potentiometers attached
+      (pro micro A1=AIN0, A2=AIN5, A3=AIN7). Omit if no sliders populated.
+
+  slider-deadband:
+    type: int
+    default: 24
+    description: raw ADC counts of hysteresis before a slider change registers
+
+child-binding:
+  description: Per-layer knob profile
+
+  properties:
+    layer:
+      type: int
+      required: true
+      description: ZMK layer index this profile is active on
+
+    mode:
+      type: string
+      default: "scroll"
+      enum: ["scroll", "keycode", "bounded"]
+      description: |
+        scroll  - emit relative input events (input-code) per detent
+        keycode - tap cw-code / ccw-code (ZMK keymap encodings) per detent
+        bounded - like scroll but clamped to [range-min, range-max] with an
+                  end-stop haptic at the limits
+
+    detents-per-rev:
+      type: int
+      default: 24
+
+    haptic-effect:
+      type: int
+      default: 0
+      description: TI waveform library effect ID fired per detent (0 = none)
+
+    input-code:
+      type: int
+      default: 8
+      description: input event code for scroll/bounded mode (default REL_WHEEL)
+
+    cw-code:
+      type: int
+      default: 0
+      description: ZMK keymap encoding (e.g. C_VOL_UP) tapped on clockwise detents
+
+    ccw-code:
+      type: int
+      default: 0
+      description: ZMK keymap encoding tapped on counter-clockwise detents
+
+    range-min:
+      type: int
+      default: 0
+
+    range-max:
+      type: int
+      default: 100
+
+    endstop-effect:
+      type: int
+      default: 0
+      description: TI effect ID fired when a bounded value hits its limit
+
+    slider-role:
+      type: string
+      default: "none"
+      enum: ["none", "wheel-scale", "own-control"]
+      description: |
+        none        - sliders ignored in this profile
+        wheel-scale - slider position scales detent output 1x..wheel-scale-max
+        own-control - slider movement emits its own input events
+
+    slider-index:
+      type: int
+      default: 0
+      description: index into slider-channels used by this profile
+
+    slider-input-code:
+      type: int
+      default: 6
+      description: input event code for own-control slider (default REL_HWHEEL)
+
+    slider-steps:
+      type: int
+      default: 32
+      description: quantization buckets across the slider travel (own-control)
+
+    slider-effect:
+      type: int
+      default: 0
+      description: TI effect ID fired per slider step (0 = none)
+
+    wheel-scale-max:
+      type: int
+      default: 4
+      description: max multiplier when slider-role is wheel-scale

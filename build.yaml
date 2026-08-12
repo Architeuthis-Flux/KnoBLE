@@ -1,0 +1,11 @@
+# Build matrix for the GitHub Actions workflow.
+# Each entry produces a flashable .uf2 artifact.
+---
+include:
+  - board: nice_nano_v2
+    shield: knoble
+  - board: nice_nano_v2
+    shield: knoble
+    snippet: studio-rpc-usb-uart
+    cmake-args: -DCONFIG_ZMK_STUDIO=y
+    artifact-name: knoble_studio

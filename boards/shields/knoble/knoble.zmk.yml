@@ -1,0 +1,10 @@
+file_format: "1"
+id: knoble
+name: KnoBLE
+type: shield
+url: https://github.com/BaselineDesign/KnoBLE
+requires: [pro_micro]
+features:
+  - keys
+  - underglow
+  - studio

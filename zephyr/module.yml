@@ -1,0 +1,6 @@
+build:
+  cmake: modules/knob-engine
+  kconfig: modules/knob-engine/Kconfig
+  settings:
+    board_root: .
+    dts_root: modules/knob-engine

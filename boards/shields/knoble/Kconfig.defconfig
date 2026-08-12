@@ -1,0 +1,30 @@
+if SHIELD_KNOBLE
+
+config ZMK_KEYBOARD_NAME
+    default "KnoBLE"
+
+# The knob engine needs the AS5600 angle sensor and I2C.
+config I2C
+    default y
+
+config SENSOR
+    default y
+
+# The knob emits pointer (wheel) events through ZMK's input pipeline.
+config ZMK_POINTING
+    default y
+
+config INPUT
+    default y
+
+# WS2812 underglow (3 LEDs) over SPI.
+config ZMK_RGB_UNDERGLOW
+    default y
+
+config WS2812_STRIP
+    default y
+
+config SPI
+    default y
+
+endif

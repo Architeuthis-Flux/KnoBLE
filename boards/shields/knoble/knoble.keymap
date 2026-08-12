@@ -1,0 +1,24 @@
+#include <behaviors.dtsi>
+#include <dt-bindings/zmk/keys.h>
+#include <dt-bindings/zmk/bt.h>
+#include <dt-bindings/zmk/outputs.h>
+
+/ {
+    keymap {
+        compatible = "zmk,keymap";
+
+        /* Layer 0 — knob scrolls (profile_scroll).
+         * Hold the middle key for layer 1. */
+        default_layer {
+            display-name = "Media";
+            bindings = <&kp C_PREV  &lt 1 C_PP  &kp C_NEXT>;
+        };
+
+        /* Layer 1 — knob is volume with finer detents (profile_volume).
+         * Left key cycles BT profile, right key toggles USB/BLE output. */
+        volume_layer {
+            display-name = "Volume";
+            bindings = <&bt BT_NXT  &trans  &out OUT_TOG>;
+        };
+    };
+};
