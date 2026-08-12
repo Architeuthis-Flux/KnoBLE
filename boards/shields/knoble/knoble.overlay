@@ -80,10 +80,10 @@
             detents-per-rev = <16>;
             haptic-effect = <1>;              /* TI lib 6: strong click 100% */
             input-code = <INPUT_REL_WHEEL>;
-            /* slider sets scroll speed: 1x (bottom) .. 4x (top) */
+            /* slider sets scroll speed: 1x (bottom) .. 8x (top) */
             slider-role = "wheel-scale";
             slider-index = <0>;
-            wheel-scale-max = <4>;
+            wheel-scale-max = <8>;
         };
 
         profile_volume {
