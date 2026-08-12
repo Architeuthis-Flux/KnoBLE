@@ -58,6 +58,14 @@ properties:
       scroll acceleration (e.g. macOS) doesn't amplify fast knob spins.
       Total scroll distance is unaffected.
 
+  wheel-max-lines-per-report:
+    type: int
+    default: 4
+    description: |
+      Hard velocity ceiling: lines beyond this per report window are DROPPED.
+      Tames flywheel flicks whose physical inertia would otherwise stack with
+      host-side scroll acceleration. 0 disables the ceiling.
+
 child-binding:
   description: Per-layer knob profile
 

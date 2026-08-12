@@ -487,7 +487,15 @@ static void wheel_flush(struct knob_data *data, bool force) {
     if (!force && (now - data->last_flush_ms) < DT_INST_PROP(0, wheel_report_interval_ms)) {
         return;
     }
-    input_report_rel(data->dev, data->last_prof->input_code, data->out_pending, true, K_NO_WAIT);
+
+    int32_t out = data->out_pending;
+    /* velocity ceiling: the flywheel's inertia is acceleration enough —
+     * drop anything past the cap instead of banking it */
+    const int32_t cap = DT_INST_PROP(0, wheel_max_lines_per_report);
+    if (cap > 0) {
+        out = CLAMP(out, -cap, cap);
+    }
+    input_report_rel(data->dev, data->last_prof->input_code, out, true, K_NO_WAIT);
     data->out_pending = 0;
     data->last_flush_ms = now;
 }
