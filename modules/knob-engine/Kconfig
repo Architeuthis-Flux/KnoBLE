@@ -11,6 +11,18 @@ config KNOB_ENGINE_INIT_PRIORITY
     int "Init priority"
     default 91
 
+config KNOB_SETTINGS
+    bool "Runtime settings over vendor raw HID (USB): key remap, persistence"
+    default y
+    depends on ZMK_USB
+    select SETTINGS
+    help
+      QMK-raw-HID-shaped channel (usage page 0xFF60) on a second USB HID
+      instance; requires CONFIG_USB_HID_DEVICE_COUNT=2. The companion app
+      remaps the key slots at runtime; values persist in NVS. The keymap
+      must bind &kslot for slots to take effect. BLE transport is a
+      follow-up — configuration happens over the cable, like VIA.
+
 config KNOB_WHEEL_RES_MULTIPLIER
     int
     default 16 if ZMK_POINTING_SMOOTH_SCROLLING

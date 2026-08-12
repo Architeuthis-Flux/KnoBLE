@@ -16,6 +16,23 @@
             flavor = "hold-preferred";
             bindings = <&bootloader>, <&none>;
         };
+
+        /* Runtime-remappable key slots (companion app, raw-HID channel).
+         * Defaults mirror the old &kp bindings: prev / play-pause / next. */
+        kslot: key_slot {
+            compatible = "baseline,behavior-key-slot";
+            #binding-cells = <1>;
+        };
+
+        /* Like &lt but the tap keycode comes from a slot: hold = layer,
+         * tap = &kslot <param2>. Same flavor/term as stock &lt. */
+        ltk: layer_tap_slot {
+            compatible = "zmk,behavior-hold-tap";
+            #binding-cells = <2>;
+            tapping-term-ms = <200>;
+            flavor = "tap-preferred";
+            bindings = <&mo>, <&kslot>;
+        };
     };
 
     combos {
@@ -34,7 +51,7 @@
          * Hold the middle key for layer 1. */
         default_layer {
             display-name = "Media";
-            bindings = <&kp C_PREV  &lt 1 C_PP  &kp C_NEXT>;
+            bindings = <&kslot 0  &ltk 1 1  &kslot 2>;
         };
 
         /* Layer 1 — knob is volume with finer detents (profile_volume).

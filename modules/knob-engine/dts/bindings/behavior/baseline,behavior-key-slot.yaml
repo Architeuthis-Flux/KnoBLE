@@ -1,0 +1,15 @@
+# Key press behavior reading its keycode from the runtime settings store
+# (remappable over the raw-HID settings channel). Param: slot index 0..2.
+
+description: Runtime-remappable key slot behavior
+
+compatible: "baseline,behavior-key-slot"
+
+properties:
+  "#binding-cells":
+    type: int
+    required: true
+    const: 1
+
+binding-cells:
+  - param1
