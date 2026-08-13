@@ -186,10 +186,9 @@ struct knob_data {
     int64_t last_motion_ms;
     bool dozing;
 
-    /* LED state: rainbow chase while spinning, gauge when still */
+    /* LED state: rotation-locked rainbow (frozen at rest, off in doze) */
     int32_t led_phase;
-    bool led_spinning;
-    bool led_restore; /* force a static redraw (e.g. after doze wake) */
+    bool led_restore; /* force a repaint (boot, doze wake) */
 
     /* scroll output pooled between rate-limited HID reports */
     int32_t out_pending;
@@ -290,27 +289,6 @@ static struct led_rgb hue_to_rgb(uint16_t h, uint8_t v) {
 
 #define LED_GAUGE_BRIGHTNESS 60
 
-/* Whole strip shows the speed: 240deg (blue) at the slowest divider,
- * through green around 1x, to 0deg (red) at the top multiplier. */
-static void leds_show_speed(const struct knob_profile *prof, int32_t speed) {
-    if (!device_is_ready(knob_leds)) {
-        return;
-    }
-
-    const int32_t max_m = MAX(prof->wheel_scale_max, 1);
-    const int32_t min_d = MAX(prof->wheel_scale_min_div, 1);
-    const int32_t span = MAX((min_d - 1) + (max_m - 1), 1);
-    int32_t n = (speed < 0) ? (min_d + speed) : (min_d - 1 + speed - 1);
-    n = CLAMP(n, 0, span);
-
-    struct led_rgb px = hue_to_rgb(240 - (240 * n) / span, LED_GAUGE_BRIGHTNESS);
-    struct led_rgb buf[LED_CHAIN];
-    for (size_t i = 0; i < LED_CHAIN; i++) {
-        buf[i] = px;
-    }
-    led_strip_update_rgb(knob_leds, buf, LED_CHAIN);
-}
-
 static void leds_off(void) {
     if (!device_is_ready(knob_leds)) {
         return;
@@ -319,10 +297,12 @@ static void leds_off(void) {
     led_strip_update_rgb(knob_leds, buf, LED_CHAIN);
 }
 
-/* Spin animation: a rainbow whose phase is the wheel's own position — one
- * full revolution sweeps the hue wheel once, and the pattern walks across
- * the strip in the direction of rotation (reverses instantly with it). */
-static void leds_show_spin(int32_t phase_ticks) {
+/* The strip's one look: a rainbow whose phase is the wheel's own position —
+ * one revolution sweeps the hue wheel once, the pattern walks across the
+ * strip in the rotation direction (reversing instantly with it), and it
+ * freezes in place when the wheel stops. Brightness carries the speed
+ * setting: dim at the bottom divider, bright at the top multiplier. */
+static void leds_show_spin(int32_t phase_ticks, uint8_t brightness) {
     if (!device_is_ready(knob_leds)) {
         return;
     }
@@ -331,21 +311,44 @@ static void leds_show_spin(int32_t phase_ticks) {
     for (size_t i = 0; i < LED_CHAIN; i++) {
         int32_t h = deg - (int32_t)i * 40; /* 40° spacing across the strip */
         h = ((h % 360) + 360) % 360;
-        buf[i] = hue_to_rgb((uint16_t)h, LED_GAUGE_BRIGHTNESS);
+        buf[i] = hue_to_rgb((uint16_t)h, brightness);
     }
     led_strip_update_rgb(knob_leds, buf, LED_CHAIN);
 }
 
 #else
 
-static void leds_show_speed(const struct knob_profile *prof, int32_t speed) {
-    ARG_UNUSED(prof);
-    ARG_UNUSED(speed);
-}
 static void leds_off(void) {}
-static void leds_show_spin(int32_t phase_ticks) { ARG_UNUSED(phase_ticks); }
+static void leds_show_spin(int32_t phase_ticks, uint8_t brightness) {
+    ARG_UNUSED(phase_ticks);
+    ARG_UNUSED(brightness);
+}
 
 #endif /* KNOB_HAS_LEDS */
+
+
+/* Draw the rainbow at the current wheel phase, brightness from the speed
+ * setting (dim at /min_div, bright at x max). The strip's only state. */
+static void leds_spin_state(struct knob_data *data, const struct knob_profile *prof) {
+#if KNOB_HAS_LEDS
+    int32_t max_m = MAX(prof->wheel_scale_max, 1);
+    int32_t min_d = MAX(prof->wheel_scale_min_div, 1);
+#if IS_ENABLED(CONFIG_KNOB_SETTINGS)
+    const struct knob_pot_cfg *pc = knob_settings_pot();
+    max_m = MAX(pc->speed_max_mult, 1);
+    min_d = MAX(pc->speed_min_div, 1);
+#endif
+    const int32_t span = MAX((min_d - 1) + (max_m - 1), 1);
+    const int32_t speed = data->cached_speed != 0 ? data->cached_speed : 1;
+    int32_t n = (speed < 0) ? (min_d + speed) : (min_d - 1 + speed - 1);
+    n = CLAMP(n, 0, span);
+    const uint8_t brightness = (uint8_t)(8 + (52 * n) / span);
+    leds_show_spin(data->led_phase, brightness);
+#else
+    ARG_UNUSED(data);
+    ARG_UNUSED(prof);
+#endif
+}
 
 /* ---------------- doze (battery wake-check tier) ---------------- */
 
@@ -422,14 +425,6 @@ static void tap_keycode(uint32_t encoded);
 /* The physical slide pot is the WHEEL_SCALE slider of the scroll profile;
  * with the settings channel built in, its role/sensitivity come from the
  * runtime store instead of devicetree. Other profiles keep DT behavior. */
-static bool pot_role_is_speed(void) {
-#if IS_ENABLED(CONFIG_KNOB_SETTINGS)
-    return knob_settings_pot()->role == KNOB_POT_ROLE_SPEED;
-#else
-    return true;
-#endif
-}
-
 /* True when the profile's wheel-scale slider is NOT the settings pot: a
  * dual-pot build where speed has its own dedicated slider. */
 static bool speed_slider_is_fixed(const struct knob_profile *prof) {
@@ -796,12 +791,7 @@ static void knob_work_handler(struct k_work *work) {
         data->last_prof = prof;
         data->accum_scaled = 0;
         data->out_accum_scaled = 0;
-        if (prof->slider_role == SLIDER_ROLE_WHEEL_SCALE &&
-            (speed_slider_is_fixed(prof) || pot_role_is_speed())) {
-            leds_show_speed(prof, data->cached_speed);
-        } else {
-            leds_off(); /* gauge only means something for the speed role */
-        }
+        leds_spin_state(data, prof);
     }
 
     /* Sample the sliders continuously (~30 Hz) so the LED gauge tracks the
@@ -821,16 +811,7 @@ static void knob_work_handler(struct k_work *work) {
         if (speed != data->cached_speed) {
             data->cached_speed = speed;
             LOG_INF("speed -> %+d", speed);
-            /* Gauge follows the speed slider; in dual-pot builds that's the
-             * fixed one, so the gauge is always meaningful. Don't fight the
-             * spin animation — it restores the gauge when rotation stops. */
-            if (!data->led_spinning) {
-                if (speed_slider_is_fixed(prof) || pot_role_is_speed()) {
-                    leds_show_speed(prof, speed);
-                } else {
-                    leds_off();
-                }
-            }
+            leds_spin_state(data, prof); /* new brightness, same phase */
         }
         aux_pot_process(data, prof); /* dual-pot: the remappable one */
 
@@ -875,24 +856,15 @@ static void knob_work_handler(struct k_work *work) {
             data->last_motion_ms = k_uptime_get(); /* wheel motion = wake/stay-awake */
         }
 
-        /* LEDs narrate the state: rainbow chase phase-locked to rotation
-         * while spinning, back to the speed gauge ~200ms after it stops. */
+        /* The rainbow tracks rotation and freezes in place at rest;
+         * led_restore forces a repaint (boot, doze wake). */
         if (!data->dozing) {
             if (delta != 0) {
                 data->led_phase += delta;
-                leds_show_spin(data->led_phase);
-                data->led_spinning = true;
-            } else if (data->led_restore ||
-                       (data->led_spinning &&
-                        (k_uptime_get() - data->last_motion_ms) > 200)) {
-                data->led_spinning = false;
+                leds_spin_state(data, prof);
+            } else if (data->led_restore) {
                 data->led_restore = false;
-                if (prof->slider_role == SLIDER_ROLE_WHEEL_SCALE &&
-                    (speed_slider_is_fixed(prof) || pot_role_is_speed())) {
-                    leds_show_speed(prof, data->cached_speed);
-                } else {
-                    leds_off();
-                }
+                leds_spin_state(data, prof);
             }
         }
         /* exact integer detent quantizer: accumulate delta * detents, one
@@ -965,6 +937,7 @@ static int knob_engine_init(const struct device *dev) {
     data->dev = dev;
     data->cached_speed = 1;
     data->last_motion_ms = k_uptime_get();
+    data->led_restore = true; /* paint the rainbow on the first tick */
 
     if (!device_is_ready(knob_sensor)) {
         LOG_ERR("angle sensor not ready");
