@@ -10,3 +10,31 @@ jobs:
     # @main expects a newer Zephyr (its `west boards -f {qualifiers}` dies
     # with KeyError on v0.3's Zephyr 3.5). Bump together with the manifest.
     uses: zmkfirmware/zmk/.github/workflows/build-user-config.yml@v0.3
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: firmware
+          path: firmware
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: firmware/*.uf2
+          body: |
+            **KnoBLE firmware** for the wireless [KNOB v2.1](https://baselinedesign.tech/products/knobv21) retrofit (nRF52840 SuperMini).
+
+            | File | Use it for |
+            |---|---|
+            | `nice_nano_v2-knoble-zmk.uf2` | **macOS** (pair with the [Knob companion app](https://github.com/Architeuthis-Flux/KnoBLE-App/releases) for smooth scrolling + config) |
+            | `knoble_hires.uf2` | **Windows / Linux** — smooth hi-res scrolling natively, no software needed. Do NOT pair this build with a Mac (16× too fast). |
+            | `knoble_studio.uf2` | ZMK Studio (full keymap editing over USB) |
+
+            Flash: hold both keys 3 s → copy the .uf2 onto the `NICENANO` drive.
+            Keys, pot roles, sensitivities, and doze timing are runtime settings — set them from the companion app over USB; they persist on the knob.

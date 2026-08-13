@@ -19,6 +19,7 @@
 
 #include <zephyr/device.h>
 #include <zephyr/kernel.h>
+#include <zephyr/drivers/i2c.h>
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/input/input.h>
 #include <zephyr/logging/log.h>
@@ -69,6 +70,20 @@ LOG_MODULE_REGISTER(knob_engine, CONFIG_KNOB_ENGINE_LOG_LEVEL);
 
 /* Minimum gap between end-stop buzzes so leaning on the stop doesn't rattle. */
 #define ENDSTOP_COOLDOWN_MS 250
+
+/* Wheel/pot motion holds the fast poll tier this long. ZMK's activity state
+ * only refreshes on KEYS (position/sensor events) — knob rotation is
+ * invisible to it, so the engine keeps its own motion clock. */
+#define KNOB_ACTIVE_HOLD_MS 10000
+
+/* Raw AS5600 ticks of delta that count as "someone touched the wheel" for
+ * the motion clock (noise floor is ~1-2 LSB when still). */
+#define KNOB_MOTION_TICKS 3
+
+/* AS5600 CONF low byte (0x08), PM[1:0]: 00 NOM ~6.5mA, 11 LPM3 ~1.5mA. */
+#define AS5600_REG_CONF_LO 0x08
+#define AS5600_PM_NOM 0x00
+#define AS5600_PM_LPM3 0x03
 
 #define KNOB_ABS(x) ((x) < 0 ? -(x) : (x))
 
@@ -167,6 +182,10 @@ struct knob_data {
     int32_t cached_speed;
     uint8_t slider_tick;
 
+    /* doze: the battery wake-check tier (see knob_select_poll_hz) */
+    int64_t last_motion_ms;
+    bool dozing;
+
     /* scroll output pooled between rate-limited HID reports */
     int32_t out_pending;
     int64_t last_flush_ms;
@@ -178,6 +197,22 @@ struct knob_data {
 };
 
 static const struct device *const knob_sensor = DEVICE_DT_GET(DT_INST_PHANDLE(0, sensor));
+
+/* Direct I2C access to the AS5600's CONF register for power-mode switching
+ * (the in-tree driver exposes no attribute for it). */
+static const struct i2c_dt_spec knob_sensor_i2c = I2C_DT_SPEC_GET(DT_INST_PHANDLE(0, sensor));
+
+static void as5600_set_power_mode(uint8_t pm) {
+    uint8_t v;
+    if (i2c_reg_read_byte_dt(&knob_sensor_i2c, AS5600_REG_CONF_LO, &v) != 0) {
+        LOG_WRN("AS5600 CONF read failed; power mode unchanged");
+        return;
+    }
+    v = (v & ~0x03) | (pm & 0x03);
+    if (i2c_reg_write_byte_dt(&knob_sensor_i2c, AS5600_REG_CONF_LO, v) != 0) {
+        LOG_WRN("AS5600 CONF write failed; power mode unchanged");
+    }
+}
 
 #if KNOB_HAS_HAPTICS
 static const struct device *const knob_haptics = DEVICE_DT_GET(DT_INST_PHANDLE(0, haptics));
@@ -288,6 +323,60 @@ static void leds_show_speed(const struct knob_profile *prof, int32_t speed) {
 static void leds_off(void) {}
 
 #endif /* KNOB_HAS_LEDS */
+
+/* ---------------- doze (battery wake-check tier) ---------------- */
+
+static void leds_off(void);
+
+/* Runtime-configurable via the settings channel when built in; DT defaults
+ * otherwise. timeout 0 = never doze. */
+static void knob_doze_params(int64_t *timeout_ms, uint32_t *check_hz) {
+#if IS_ENABLED(CONFIG_KNOB_SETTINGS)
+    const struct knob_doze_cfg *dc = knob_settings_doze();
+    *timeout_ms = (int64_t)dc->timeout_s * 1000;
+    *check_hz = MAX(dc->poll_hz, 1);
+#else
+    *timeout_ms = DT_INST_PROP(0, doze_timeout_ms);
+    *check_hz = MAX(DT_INST_PROP(0, doze_poll_hz), 1);
+#endif
+}
+
+static void knob_set_doze(struct knob_data *data, bool doze) {
+    if (data->dozing == doze) {
+        return;
+    }
+    data->dozing = doze;
+    if (doze) {
+        LOG_INF("doze: sensor to LPM3, wake-checking");
+        as5600_set_power_mode(AS5600_PM_LPM3);
+        leds_off();
+    } else {
+        LOG_INF("doze: motion — waking");
+        as5600_set_power_mode(AS5600_PM_NOM);
+    }
+}
+
+/* Poll tier: fast while keys are active (ZMK's clock) or the wheel/pots
+ * moved recently (our clock — ZMK can't see knob motion); doze after the
+ * configured quiet period; the plain idle rate in between. */
+static uint32_t knob_select_poll_hz(struct knob_data *data) {
+    int64_t doze_timeout_ms;
+    uint32_t doze_hz;
+    knob_doze_params(&doze_timeout_ms, &doze_hz);
+
+    const int64_t since_motion = k_uptime_get() - data->last_motion_ms;
+    if (zmk_activity_get_state() == ZMK_ACTIVITY_ACTIVE ||
+        since_motion < KNOB_ACTIVE_HOLD_MS) {
+        knob_set_doze(data, false);
+        return DT_INST_PROP(0, poll_hz);
+    }
+    if (doze_timeout_ms > 0 && since_motion >= doze_timeout_ms) {
+        knob_set_doze(data, true);
+        return doze_hz;
+    }
+    knob_set_doze(data, false);
+    return DT_INST_PROP(0, idle_poll_hz);
+}
 
 /* ---------------- profile selection ---------------- */
 
@@ -691,9 +780,19 @@ static void knob_work_handler(struct k_work *work) {
         }
     }
 
-    /* Sample the slider continuously (~30 Hz) so the LED gauge tracks the
-     * pot live, not just when the knob moves. */
-    if (prof->slider_role == SLIDER_ROLE_WHEEL_SCALE && (data->slider_tick++ % 8) == 0) {
+    /* Sample the sliders continuously (~30 Hz) so the LED gauge tracks the
+     * pot live, not just when the knob moves. While dozing, sample every
+     * tick instead — pot movement is a wake action. */
+#if KNOB_HAS_SLIDERS
+    int32_t doze_raw_before[NUM_SLIDERS];
+    if (data->dozing) {
+        for (size_t i = 0; i < NUM_SLIDERS; i++) {
+            doze_raw_before[i] = data->sliders[i].raw;
+        }
+    }
+#endif
+    if (prof->slider_role == SLIDER_ROLE_WHEEL_SCALE &&
+        (data->dozing || (data->slider_tick++ % 8) == 0)) {
         int32_t speed = slider_process(data, prof);
         if (speed != data->cached_speed) {
             data->cached_speed = speed;
@@ -707,6 +806,17 @@ static void knob_work_handler(struct k_work *work) {
             }
         }
         aux_pot_process(data, prof); /* dual-pot: the remappable one */
+
+#if KNOB_HAS_SLIDERS
+        if (data->dozing) {
+            const int32_t deadband = DT_INST_PROP(0, slider_deadband);
+            for (size_t i = 0; i < NUM_SLIDERS; i++) {
+                if (KNOB_ABS(data->sliders[i].raw - doze_raw_before[i]) > deadband) {
+                    data->last_motion_ms = k_uptime_get(); /* pot move = wake */
+                }
+            }
+        }
+#endif
     }
 
     if (knob_read_position(&pos) == 0) {
@@ -734,6 +844,9 @@ static void knob_work_handler(struct k_work *work) {
 #if DT_INST_PROP(0, invert)
         delta = -delta;
 #endif
+        if (KNOB_ABS(delta) >= KNOB_MOTION_TICKS) {
+            data->last_motion_ms = k_uptime_get(); /* wheel motion = wake/stay-awake */
+        }
         /* exact integer detent quantizer: accumulate delta * detents, one
          * step per full TICKS_PER_REV of accumulated product */
         /* detent quantizer: drives haptics, and output for keycode/bounded */
@@ -792,10 +905,7 @@ static void knob_work_handler(struct k_work *work) {
         return;
     }
 
-    uint32_t hz = DT_INST_PROP(0, poll_hz);
-    if (zmk_activity_get_state() != ZMK_ACTIVITY_ACTIVE) {
-        hz = DT_INST_PROP(0, idle_poll_hz);
-    }
+    const uint32_t hz = knob_select_poll_hz(data);
     k_work_reschedule_for_queue(&knob_wq, dwork, K_USEC(1000000 / MAX(hz, 1)));
 }
 
@@ -806,6 +916,7 @@ static int knob_engine_init(const struct device *dev) {
 
     data->dev = dev;
     data->cached_speed = 1;
+    data->last_motion_ms = k_uptime_get();
 
     if (!device_is_ready(knob_sensor)) {
         LOG_ERR("angle sensor not ready");

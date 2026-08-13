@@ -49,6 +49,22 @@ properties:
     default: 24
     description: raw ADC counts of hysteresis before a slider change registers
 
+  doze-timeout-ms:
+    type: int
+    default: 120000
+    description: |
+      No wheel/pot motion for this long (and no key activity) drops the
+      engine into doze: AS5600 in LPM3, LEDs off, polling at doze-poll-hz
+      purely to catch a wake motion. Replaces ZMK deep sleep, which the
+      wheel could never wake (the AS5600 has no interrupt line).
+
+  doze-poll-hz:
+    type: int
+    default: 4
+    description: |
+      Wake-check rate while dozing. Any wheel rotation or pot move seen by
+      a check restores full polling — worst-case wake latency is one period.
+
   settings-pot-index:
     type: int
     default: 0

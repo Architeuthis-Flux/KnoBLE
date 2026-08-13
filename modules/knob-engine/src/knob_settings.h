@@ -29,6 +29,14 @@ struct knob_pot_cfg {
 
 const struct knob_pot_cfg *knob_settings_pot(void);
 
+/* Doze (battery wake-check) settings. timeout 0 = never doze. */
+struct knob_doze_cfg {
+    uint16_t timeout_s;
+    uint8_t poll_hz;
+};
+
+const struct knob_doze_cfg *knob_settings_doze(void);
+
 /* Engine -> settings: latest pot sample, for live reporting to the host.
  * semantic: signed speed for the speed role, bucket index otherwise. */
 void knob_settings_note_pot(int32_t raw, int16_t semantic);

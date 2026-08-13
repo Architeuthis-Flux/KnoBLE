@@ -39,6 +39,8 @@ enum knob_cmd {
     KNOB_CMD_GET_POT_CFG = 0x06,
     KNOB_CMD_SET_POT_CFG = 0x07,
     KNOB_CMD_GET_POT_VALUE = 0x08,
+    KNOB_CMD_GET_DOZE_CFG = 0x09,
+    KNOB_CMD_SET_DOZE_CFG = 0x0A,
 };
 
 #define KNOB_PROTO_VERSION 2
@@ -55,9 +57,13 @@ static const struct knob_pot_cfg default_pot_cfg = {
     .steps = 32,
 };
 
+/* Doze default: 2 min quiet -> wake-check at 4 Hz. */
+static const struct knob_doze_cfg default_doze_cfg = {.timeout_s = 120, .poll_hz = 4};
+
 static struct {
     uint32_t key_codes[KNOB_KEY_SLOTS];
     struct knob_pot_cfg pot;
+    struct knob_doze_cfg doze;
 } knob_cfg;
 
 /* Live pot sample, engine-thread written, USB-thread read; both 32-bit
@@ -73,6 +79,8 @@ uint32_t knob_settings_key_code(uint8_t slot) {
 }
 
 const struct knob_pot_cfg *knob_settings_pot(void) { return &knob_cfg.pot; }
+
+const struct knob_doze_cfg *knob_settings_doze(void) { return &knob_cfg.doze; }
 
 void knob_settings_note_pot(int32_t raw, int16_t semantic) {
     pot_raw_latest = raw;
@@ -107,6 +115,18 @@ static int knob_settings_set(const char *name, size_t len, settings_read_cb read
         }
         return rc;
     }
+    if (settings_name_steq(name, "doze", NULL)) {
+        if (len != sizeof(knob_cfg.doze)) {
+            return -EINVAL;
+        }
+        int rc = read_cb(cb_arg, &knob_cfg.doze, sizeof(knob_cfg.doze));
+        if (rc >= 0) {
+            LOG_INF("loaded doze cfg: %ds timeout, %d Hz checks", knob_cfg.doze.timeout_s,
+                    knob_cfg.doze.poll_hz);
+            return 0;
+        }
+        return rc;
+    }
     return -ENOENT;
 }
 
@@ -115,6 +135,7 @@ SETTINGS_STATIC_HANDLER_DEFINE(knob, "knob", NULL, knob_settings_set, NULL, NULL
 static void knob_settings_save(void) {
     settings_save_one("knob/keys", knob_cfg.key_codes, sizeof(knob_cfg.key_codes));
     settings_save_one("knob/pot", &knob_cfg.pot, sizeof(knob_cfg.pot));
+    settings_save_one("knob/doze", &knob_cfg.doze, sizeof(knob_cfg.doze));
 }
 
 /* ---------------- raw HID transport (USB, QMK-style) ---------------- */
@@ -204,6 +225,7 @@ static void handle_frame(const uint8_t *in, uint8_t *reply) {
     case KNOB_CMD_RESET:
         memcpy(knob_cfg.key_codes, default_key_codes, sizeof(knob_cfg.key_codes));
         knob_cfg.pot = default_pot_cfg;
+        knob_cfg.doze = default_doze_cfg;
         knob_settings_save();
         LOG_INF("settings reset to defaults");
         break;
@@ -236,6 +258,24 @@ static void handle_frame(const uint8_t *in, uint8_t *reply) {
         }
         LOG_INF("pot cfg -> role %d, /%d..x%d, %d steps (staged)", knob_cfg.pot.role,
                 knob_cfg.pot.speed_min_div, knob_cfg.pot.speed_max_mult, knob_cfg.pot.steps);
+        break;
+    }
+
+    case KNOB_CMD_GET_DOZE_CFG:
+        sys_put_le16(knob_cfg.doze.timeout_s, &reply[3]);
+        reply[5] = knob_cfg.doze.poll_hz;
+        break;
+
+    case KNOB_CMD_SET_DOZE_CFG: {
+        const uint16_t timeout_s = sys_get_le16(&in[2]);
+        const uint8_t hz = in[4];
+        if (hz < 1 || hz > 20) {
+            reply[2] = KNOB_STATUS_BAD_ARG;
+            break;
+        }
+        knob_cfg.doze.timeout_s = timeout_s; /* 0 = never doze */
+        knob_cfg.doze.poll_hz = hz;
+        LOG_INF("doze cfg -> %ds, %d Hz (staged)", timeout_s, hz);
         break;
     }
 
@@ -291,6 +331,7 @@ static const struct hid_ops raw_ops = {
 static int knob_settings_init(void) {
     memcpy(knob_cfg.key_codes, default_key_codes, sizeof(knob_cfg.key_codes));
     knob_cfg.pot = default_pot_cfg;
+    knob_cfg.doze = default_doze_cfg;
     /* NVS overrides defaults via the settings handler during settings_load()
      * (ZMK calls it at startup for BLE bonds; our handler rides along). */
 
