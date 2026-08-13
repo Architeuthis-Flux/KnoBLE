@@ -186,6 +186,11 @@ struct knob_data {
     int64_t last_motion_ms;
     bool dozing;
 
+    /* LED state: rainbow chase while spinning, gauge when still */
+    int32_t led_phase;
+    bool led_spinning;
+    bool led_restore; /* force a static redraw (e.g. after doze wake) */
+
     /* scroll output pooled between rate-limited HID reports */
     int32_t out_pending;
     int64_t last_flush_ms;
@@ -314,6 +319,23 @@ static void leds_off(void) {
     led_strip_update_rgb(knob_leds, buf, LED_CHAIN);
 }
 
+/* Spin animation: a rainbow whose phase is the wheel's own position — one
+ * full revolution sweeps the hue wheel once, and the pattern walks across
+ * the strip in the direction of rotation (reverses instantly with it). */
+static void leds_show_spin(int32_t phase_ticks) {
+    if (!device_is_ready(knob_leds)) {
+        return;
+    }
+    const int32_t deg = ((phase_ticks % TICKS_PER_REV) * 360) / TICKS_PER_REV;
+    struct led_rgb buf[LED_CHAIN];
+    for (size_t i = 0; i < LED_CHAIN; i++) {
+        int32_t h = deg - (int32_t)i * 40; /* 40° spacing across the strip */
+        h = ((h % 360) + 360) % 360;
+        buf[i] = hue_to_rgb((uint16_t)h, LED_GAUGE_BRIGHTNESS);
+    }
+    led_strip_update_rgb(knob_leds, buf, LED_CHAIN);
+}
+
 #else
 
 static void leds_show_speed(const struct knob_profile *prof, int32_t speed) {
@@ -321,6 +343,7 @@ static void leds_show_speed(const struct knob_profile *prof, int32_t speed) {
     ARG_UNUSED(speed);
 }
 static void leds_off(void) {}
+static void leds_show_spin(int32_t phase_ticks) { ARG_UNUSED(phase_ticks); }
 
 #endif /* KNOB_HAS_LEDS */
 
@@ -353,6 +376,7 @@ static void knob_set_doze(struct knob_data *data, bool doze) {
     } else {
         LOG_INF("doze: motion — waking");
         as5600_set_power_mode(AS5600_PM_NOM);
+        data->led_restore = true; /* gauge back on — nothing else redraws it */
     }
 }
 
@@ -798,11 +822,14 @@ static void knob_work_handler(struct k_work *work) {
             data->cached_speed = speed;
             LOG_INF("speed -> %+d", speed);
             /* Gauge follows the speed slider; in dual-pot builds that's the
-             * fixed one, so the gauge is always meaningful. */
-            if (speed_slider_is_fixed(prof) || pot_role_is_speed()) {
-                leds_show_speed(prof, speed);
-            } else {
-                leds_off();
+             * fixed one, so the gauge is always meaningful. Don't fight the
+             * spin animation — it restores the gauge when rotation stops. */
+            if (!data->led_spinning) {
+                if (speed_slider_is_fixed(prof) || pot_role_is_speed()) {
+                    leds_show_speed(prof, speed);
+                } else {
+                    leds_off();
+                }
             }
         }
         aux_pot_process(data, prof); /* dual-pot: the remappable one */
@@ -846,6 +873,27 @@ static void knob_work_handler(struct k_work *work) {
 #endif
         if (KNOB_ABS(delta) >= KNOB_MOTION_TICKS) {
             data->last_motion_ms = k_uptime_get(); /* wheel motion = wake/stay-awake */
+        }
+
+        /* LEDs narrate the state: rainbow chase phase-locked to rotation
+         * while spinning, back to the speed gauge ~200ms after it stops. */
+        if (!data->dozing) {
+            if (delta != 0) {
+                data->led_phase += delta;
+                leds_show_spin(data->led_phase);
+                data->led_spinning = true;
+            } else if (data->led_restore ||
+                       (data->led_spinning &&
+                        (k_uptime_get() - data->last_motion_ms) > 200)) {
+                data->led_spinning = false;
+                data->led_restore = false;
+                if (prof->slider_role == SLIDER_ROLE_WHEEL_SCALE &&
+                    (speed_slider_is_fixed(prof) || pot_role_is_speed())) {
+                    leds_show_speed(prof, data->cached_speed);
+                } else {
+                    leds_off();
+                }
+            }
         }
         /* exact integer detent quantizer: accumulate delta * detents, one
          * step per full TICKS_PER_REV of accumulated product */
